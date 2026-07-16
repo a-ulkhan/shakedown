@@ -1,0 +1,13 @@
+{
+  "name": "shakedown",
+  "owner": {
+    "name": "Ulkhan Amiraslanov"
+  },
+  "plugins": [
+    {
+      "name": "shakedown",
+      "source": "./plugin",
+      "description": "Agentic manual-test automation for mobile: /setup, /map, /goto, /test, /doctor over a persistent self-healing navigation map. Requires the shakedown CLI (npm) plus AXe (iOS) and/or adb (Android)."
+    }
+  ]
+}

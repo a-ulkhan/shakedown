@@ -7,6 +7,7 @@ import type {
   UiNode,
 } from './types.js'
 import { isPoint } from './types.js'
+import { center, findFirst } from './query.js'
 import { run, spawnDetached, sleep } from '../util/exec.js'
 
 interface SimctlDevice {
@@ -106,7 +107,18 @@ export class IosDriver implements Driver {
     else throw new Error('iOS tap selector needs identifier, label, or value')
     if (target.type) args.push('--element-type', target.type)
     args.push('--udid', deviceId)
-    await run('axe', args)
+    try {
+      await run('axe', args)
+    } catch (error) {
+      // Nested wrappers (common in SwiftUI) make one logical element match
+      // several accessibility nodes; AXe refuses ambiguous matches. Resolve
+      // to the first match ourselves and tap its center.
+      if (!String(error).includes('Multiple')) throw error
+      const roots = await this.describeUi(deviceId)
+      const node = findFirst(roots, target)
+      if (!node) throw error
+      await this.tap(deviceId, center(node))
+    }
   }
 
   async typeText(deviceId: string, text: string): Promise<void> {

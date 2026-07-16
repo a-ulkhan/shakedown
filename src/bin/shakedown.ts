@@ -1,11 +1,17 @@
 #!/usr/bin/env node
+import { spawn } from 'node:child_process'
 import { Command } from 'commander'
+import { platformProfile } from '../config.js'
 import { getDriver, parsePlatform } from '../drivers/index.js'
 import { findAll } from '../drivers/query.js'
 import type { ElementSelector, Platform, UiNode } from '../drivers/types.js'
 import { resolveRoute, renderRouteReverse } from '../map/route.js'
+import { identifyScreen, verifyScreen } from '../map/signature.js'
 import { defaultMapPath, loadEffectiveMap, loadMap, saveMap, validateMap } from '../map/store.js'
+import type { EdgeHealth } from '../map/types.js'
 import { saveRecordingHandle, takeRecordingHandle } from '../run/recording-state.js'
+import { appendStep, finishRun, loadRun, recordMapEdit, startRun } from '../run/session.js'
+import type { RunStatus, StepOutcome } from '../run/session.js'
 
 const program = new Command()
   .name('shakedown')
@@ -402,10 +408,241 @@ map
     console.log(defaultMapPath(opts.root, platform))
   })
 
+map
+  .command('set-health')
+  .description('Update an edge health state (used by self-healing)')
+  .requiredOption('--file <path>', 'map file to edit')
+  .requiredOption('--from <screen>').requiredOption('--to <screen>')
+  .option('--kind <kind>', 'action kind of the edge', 'tap')
+  .requiredOption('--health <health>', 'ok | stale | broken')
+  .option('--verified-now', 'stamp verified_at with the current time')
+  .option('--app-version <version>', 'stamp the app version the edge was verified against')
+  .action(async (opts: { file: string; from: string; to: string; kind: string; health: string; verifiedNow?: boolean; appVersion?: string }) => {
+    try {
+      if (!['ok', 'stale', 'broken'].includes(opts.health)) {
+        throw new Error(`invalid health "${opts.health}"`)
+      }
+      const nav = await loadMap(opts.file)
+      const edge = nav.edges.find(
+        (candidate) =>
+          candidate.from === opts.from &&
+          candidate.to === opts.to &&
+          candidate.action.kind === opts.kind
+      )
+      if (!edge) throw new Error(`no ${opts.kind} edge ${opts.from} → ${opts.to} in ${opts.file}`)
+      edge.health = opts.health as EdgeHealth
+      if (opts.verifiedNow) edge.verified_at = new Date().toISOString()
+      if (opts.appVersion) edge.app_version = opts.appVersion
+      await saveMap(opts.file, nav)
+      console.log(`edge ${opts.from} → ${opts.to}: health=${edge.health}`)
+    } catch (error) {
+      fail(error)
+    }
+  })
+
+// ---------------------------------------------------------------------------
+// screen — recognition against the map
+
+const screen = program.command('screen').description('Recognize the current screen using map signatures')
+
+screen
+  .command('identify')
+  .description('Rank map screens by how well the current UI matches them')
+  .requiredOption('--platform <platform>', 'ios | android')
+  .requiredOption('--device <id>', 'device UDID/serial')
+  .option('--root <dir>', 'app repo root containing .shakedown/maps', process.cwd())
+  .option('--top <n>', 'how many candidates to print', '3')
+  .action(async (opts: PlatformDeviceOpts & { root: string; top: string }) => {
+    try {
+      const platform = parsePlatform(opts.platform)
+      const nav = await loadEffectiveMap(opts.root, platform)
+      const roots = await getDriver(platform).describeUi(opts.device)
+      const matches = identifyScreen(nav, roots).slice(0, Number(opts.top))
+      console.log(JSON.stringify(matches, null, 2))
+    } catch (error) {
+      fail(error)
+    }
+  })
+
+screen
+  .command('verify <screenId>')
+  .description('Check whether the current UI matches a specific screen signature (exit 1 if not)')
+  .requiredOption('--platform <platform>', 'ios | android')
+  .requiredOption('--device <id>', 'device UDID/serial')
+  .option('--root <dir>', 'app repo root containing .shakedown/maps', process.cwd())
+  .action(async (screenId: string, opts: PlatformDeviceOpts & { root: string }) => {
+    try {
+      const platform = parsePlatform(opts.platform)
+      const nav = await loadEffectiveMap(opts.root, platform)
+      const roots = await getDriver(platform).describeUi(opts.device)
+      const result = verifyScreen(nav, screenId, roots)
+      console.log(JSON.stringify(result, null, 2))
+      if (!result.ok) process.exit(1)
+    } catch (error) {
+      fail(error)
+    }
+  })
+
+// ---------------------------------------------------------------------------
+// run — evidence sessions
+
+const runCmd = program.command('run').description('Evidence run sessions (report.json + screenshots)')
+
+runCmd
+  .command('start')
+  .requiredOption('--name <name>', 'human name of the scenario')
+  .option('--platform <platform>').option('--device <id>')
+  .option('--root <dir>', 'app repo root', process.cwd())
+  .action(async (opts: { name: string; platform?: string; device?: string; root: string }) => {
+    try {
+      const { dir } = await startRun(opts.root, opts.name, {
+        ...(opts.platform !== undefined && { platform: opts.platform }),
+        ...(opts.device !== undefined && { device: opts.device }),
+      })
+      console.log(JSON.stringify({ dir }, null, 2))
+    } catch (error) {
+      fail(error)
+    }
+  })
+
+runCmd
+  .command('step')
+  .requiredOption('--dir <dir>', 'run directory from `run start`')
+  .requiredOption('--title <title>', 'what this step did or checked')
+  .requiredOption('--outcome <outcome>', 'pass | fail | info')
+  .option('--screenshot <path>', 'screenshot evidencing the step')
+  .option('--detail <json>', 'extra structured detail')
+  .action(async (opts: { dir: string; title: string; outcome: string; screenshot?: string; detail?: string }) => {
+    try {
+      if (!['pass', 'fail', 'info'].includes(opts.outcome)) {
+        throw new Error(`invalid outcome "${opts.outcome}"`)
+      }
+      const step = await appendStep(opts.dir, {
+        title: opts.title,
+        outcome: opts.outcome as StepOutcome,
+        ...(opts.screenshot !== undefined && { screenshot: opts.screenshot }),
+        ...(opts.detail !== undefined && { detail: JSON.parse(opts.detail) as unknown }),
+      })
+      console.log(JSON.stringify(step, null, 2))
+    } catch (error) {
+      fail(error)
+    }
+  })
+
+runCmd
+  .command('map-edit')
+  .description('Record a self-healing map edit made during this run')
+  .requiredOption('--dir <dir>').requiredOption('--description <text>')
+  .action(async (opts: { dir: string; description: string }) => {
+    try {
+      await recordMapEdit(opts.dir, opts.description)
+      console.log('recorded')
+    } catch (error) {
+      fail(error)
+    }
+  })
+
+runCmd
+  .command('finish')
+  .requiredOption('--dir <dir>', 'run directory')
+  .requiredOption('--status <status>', 'pass | fail | aborted')
+  .option('--summary <text>')
+  .option('--recording <path>', 'path to the run screen recording')
+  .action(async (opts: { dir: string; status: string; summary?: string; recording?: string }) => {
+    try {
+      if (!['pass', 'fail', 'aborted'].includes(opts.status)) {
+        throw new Error(`invalid status "${opts.status}"`)
+      }
+      const report = await finishRun(opts.dir, opts.status as Exclude<RunStatus, 'running'>, {
+        ...(opts.summary !== undefined && { summary: opts.summary }),
+        ...(opts.recording !== undefined && { recording: opts.recording }),
+      })
+      console.log(JSON.stringify(report, null, 2))
+    } catch (error) {
+      fail(error)
+    }
+  })
+
+runCmd
+  .command('show')
+  .requiredOption('--dir <dir>', 'run directory')
+  .action(async (opts: { dir: string }) => {
+    try {
+      console.log(JSON.stringify(await loadRun(opts.dir), null, 2))
+    } catch (error) {
+      fail(error)
+    }
+  })
+
+// ---------------------------------------------------------------------------
+// app — profile-driven build / install / launch
+
+const app = program.command('app').description('Build, install, and launch using the app profile (.shakedown/config.json)')
+
+app
+  .command('build')
+  .requiredOption('--platform <platform>', 'ios | android')
+  .option('--root <dir>', 'app repo root', process.cwd())
+  .action(async (opts: { platform: string; root: string }) => {
+    try {
+      const profile = await platformProfile(opts.root, parsePlatform(opts.platform))
+      if (!profile.buildCommand) {
+        throw new Error(`no buildCommand in the ${opts.platform} app profile`)
+      }
+      const code = await runShell(profile.buildCommand, opts.root)
+      process.exit(code)
+    } catch (error) {
+      fail(error)
+    }
+  })
+
+app
+  .command('install')
+  .requiredOption('--platform <platform>', 'ios | android')
+  .requiredOption('--device <id>', 'device UDID/serial')
+  .option('--root <dir>', 'app repo root', process.cwd())
+  .action(async (opts: PlatformDeviceOpts & { root: string }) => {
+    try {
+      const platform = parsePlatform(opts.platform)
+      const profile = await platformProfile(opts.root, platform)
+      if (!profile.artifactPath) {
+        throw new Error(`no artifactPath in the ${opts.platform} app profile`)
+      }
+      await getDriver(platform).install(opts.device, profile.artifactPath)
+      console.log('installed')
+    } catch (error) {
+      fail(error)
+    }
+  })
+
+app
+  .command('launch')
+  .requiredOption('--platform <platform>', 'ios | android')
+  .requiredOption('--device <id>', 'device UDID/serial')
+  .option('--root <dir>', 'app repo root', process.cwd())
+  .action(async (opts: PlatformDeviceOpts & { root: string }) => {
+    try {
+      const platform = parsePlatform(opts.platform)
+      const profile = await platformProfile(opts.root, platform)
+      await getDriver(platform).launch(opts.device, profile.appId)
+      console.log(`launched ${profile.appId}`)
+    } catch (error) {
+      fail(error)
+    }
+  })
+
 // ---------------------------------------------------------------------------
 
 type NavigationMapScreens = import('../map/types.js').NavigationMap['screens']
 type NavigationMapEdges = import('../map/types.js').NavigationMap['edges']
+
+function runShell(command: string, cwd: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, { shell: true, cwd, stdio: 'inherit' })
+    child.on('error', reject)
+    child.on('exit', (code) => resolve(code ?? 1))
+  })
+}
 
 function flatten(roots: UiNode[]): Array<Omit<UiNode, 'children'>> {
   const nodes: Array<Omit<UiNode, 'children'>> = []

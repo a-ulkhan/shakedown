@@ -6,13 +6,15 @@ The trick that makes this reliable is a **persistent navigation map**: a per-app
 
 ## Status
 
-Early. Phase 1 (of 5) is done:
+Functional, young. All five build phases are in:
 
 - [x] **P1 — substrate**: unified iOS/Android driver CLI, navigation map store + route resolver
-- [ ] P2 — `/goto` skill with self-healing navigation
-- [ ] P3 — `/test` skill: scenario runner with evidence capture
-- [ ] P4 — `/map` skill: autonomous app exploration
-- [ ] P5 — polish, demo app, plugin marketplace
+- [x] **P2 — navigation**: screen recognition by signature (`screen identify`/`verify`), edge health, `/goto` skill + healer agent
+- [x] **P3 — test runs**: evidence sessions (`run start/step/finish` → report.json + screenshots + recording), `/test` skill, runner + verifier agents
+- [x] **P4 — exploration**: `/map` skill + explorer agent (targeted or full crawl, incremental saves)
+- [x] **P5 — plugin packaging**: Claude Code marketplace manifest, worked example map ([docs/examples/ios-settings.map.json](docs/examples/ios-settings.map.json), verified live against the iOS Settings app)
+
+Not yet battle-tested beyond the worked example. Expect edges.
 
 ## How it works
 
@@ -124,7 +126,38 @@ Routes are resolved by BFS (broken edges excluded, stale edges warned about), an
 
 ## Claude Code plugin
 
-The `plugin/` directory will ship skills (`/setup`, `/map`, `/goto`, `/test`, `/doctor`) and agents (explorer, runner, healer, verifier) that orchestrate the CLI. Coming in P2 to P4.
+The `plugin/` directory ships five skills and four agents that orchestrate the CLI:
+
+| Skill | Does |
+|---|---|
+| `/shakedown:setup` | Tooling preflight, project detection, app profile (`.shakedown/config.json`) |
+| `/shakedown:map` | Explore and record screens/transitions (targeted, or full crawl with a step budget) |
+| `/shakedown:goto` | Navigate to a named screen, self-healing stale edges via the healer agent |
+| `/shakedown:test` | Run a manual test scenario: navigate, act, verify, capture evidence |
+| `/shakedown:doctor` | Re-verify the whole map against the current build, repair drift |
+
+Agents: **explorer** (crawls and records), **runner** (executes scenario steps, structural checks), **healer** (diagnoses and repairs dead edges), **verifier** (visual judgments on screenshots — the checks an accessibility tree cannot answer).
+
+Install as a plugin marketplace:
+
+```
+/plugin marketplace add <this-repo-url>
+/plugin install shakedown@shakedown
+```
+
+The CLI must be on PATH (`npm install -g` or `npm link`); the skills call it via Bash.
+
+## Evidence output
+
+Each `/test` run produces a directory under `.shakedown/runs/`:
+
+```
+.shakedown/runs/2026-07-16T12-00-00_loans-smoke/
+├── report.json      # steps, outcomes, timings, self-healing map edits
+├── recording.mp4    # full-run screen recording
+├── 01_home.png
+└── 02_loans_verified.png
+```
 
 ## Prior art and credits
 

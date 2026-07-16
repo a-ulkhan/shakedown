@@ -1,0 +1,80 @@
+{
+  "app": "com.apple.Preferences",
+  "platform": "ios",
+  "schema": 1,
+  "anchors": [
+    "settings_home"
+  ],
+  "screens": {
+    "settings_home": {
+      "name": "Settings",
+      "signature": [
+        {
+          "kind": "a11yId",
+          "value": "com.apple.settings.general"
+        },
+        {
+          "kind": "a11yId",
+          "value": "com.apple.settings.accessibility"
+        },
+        {
+          "kind": "label",
+          "value": "Settings"
+        }
+      ],
+      "notes": "root list of the iOS Settings app"
+    },
+    "general": {
+      "name": "General",
+      "signature": [
+        {
+          "kind": "a11yId",
+          "value": "About"
+        },
+        {
+          "kind": "label",
+          "value": "General"
+        }
+      ]
+    },
+    "about": {
+      "name": "About",
+      "signature": [
+        {
+          "kind": "label",
+          "value": "About"
+        },
+        {
+          "kind": "label",
+          "value": "iOS Version"
+        }
+      ]
+    }
+  },
+  "edges": [
+    {
+      "from": "settings_home",
+      "to": "general",
+      "action": {
+        "kind": "tap",
+        "target": {
+          "kind": "a11yId",
+          "value": "com.apple.settings.general"
+        }
+      },
+      "health": "ok"
+    },
+    {
+      "from": "general",
+      "to": "about",
+      "action": {
+        "kind": "tap",
+        "target": {
+          "kind": "a11yId",
+          "value": "About"
+        }
+      },
+      "health": "ok"
+    }
+  ]
+}

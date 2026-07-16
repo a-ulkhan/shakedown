@@ -1,0 +1,8 @@
+{
+  "name": "shakedown",
+  "description": "Agentic manual-test automation for mobile: navigate iOS simulators and Android emulators via a persistent self-healing navigation map, run manual test scenarios, and capture evidence (screenshots, recordings, reports).",
+  "version": "0.2.0",
+  "author": {
+    "name": "Ulkhan Amiraslanov"
+  }
+}
