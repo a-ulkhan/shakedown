@@ -1,0 +1,32 @@
+{
+  "name": "shakedown",
+  "version": "0.1.0",
+  "description": "Agentic manual-test automation for iOS simulators and Android emulators: persistent navigation maps, self-healing runs, evidence capture.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "shakedown": "dist/bin/shakedown.js"
+  },
+  "files": [
+    "dist",
+    "maps/schema.json"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/bin/shakedown.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}

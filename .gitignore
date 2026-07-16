@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.shakedown/
+*.mp4
+*.png
+!docs/**/*.png
+.DS_Store

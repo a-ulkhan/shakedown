@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ulkhan/shakedown/maps/schema.json",
+  "title": "shakedown navigation map (schema v1)",
+  "type": "object",
+  "required": ["app", "platform", "schema", "anchors", "screens", "edges"],
+  "properties": {
+    "app": {
+      "type": "string",
+      "description": "Bundle id / package name of the app this map describes"
+    },
+    "platform": { "enum": ["ios", "android", "shared"] },
+    "schema": { "const": 1 },
+    "anchors": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Screen ids reachable directly by launching the app"
+    },
+    "screens": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["name", "signature"],
+        "properties": {
+          "name": { "type": "string" },
+          "signature": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/cue" },
+            "description": "2-4 stable cues that together answer: am I on this screen?"
+          },
+          "notes": { "type": "string" }
+        }
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["from", "to", "action", "health"],
+        "properties": {
+          "from": { "type": "string" },
+          "to": { "type": "string" },
+          "action": {
+            "type": "object",
+            "required": ["kind"],
+            "properties": {
+              "kind": { "enum": ["tap", "swipe", "type", "launch"] },
+              "target": { "$ref": "#/$defs/cue" },
+              "argument": {
+                "type": "string",
+                "description": "type: the text; swipe: up | down | left | right"
+              }
+            }
+          },
+          "verified_at": { "type": "string", "format": "date-time" },
+          "app_version": { "type": "string" },
+          "health": { "enum": ["ok", "stale", "broken"] }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "cue": {
+      "type": "object",
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": {
+          "enum": ["a11yId", "label", "text", "type"],
+          "description": "a11yId = accessibilityIdentifier / resource-id; label = accessibilityLabel / content-desc"
+        },
+        "value": { "type": "string" }
+      }
+    }
+  }
+}
