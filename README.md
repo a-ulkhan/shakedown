@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <img src="assets/logo.svg" alt="shakedown" width="420">
+  </picture>
+</p>
+
 # shakedown
 
 Agentic manual-test automation for mobile apps. Describe a manual test case in plain language, and an AI agent runs it on an iOS simulator or Android emulator, verifies each step, and hands you the evidence: step screenshots, a full screen recording, and a pass/fail report.

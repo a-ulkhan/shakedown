@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 512" role="img" aria-label="shakedown">
+  <!-- icon (indigo lightened for dark backgrounds) -->
+  <rect x="146" y="46" width="220" height="420" rx="48" fill="none" stroke="#818CF8" stroke-width="26"/>
+  <path d="M 216 150 Q 292 168 306 240 Q 316 300 256 346" fill="none" stroke="#A5B4FC" stroke-width="13" stroke-linecap="round" stroke-dasharray="0.1 30"/>
+  <circle cx="216" cy="150" r="19" fill="#818CF8"/>
+  <circle cx="306" cy="240" r="19" fill="#A5B4FC"/>
+  <circle cx="256" cy="346" r="46" fill="#34D399"/>
+  <path d="M 234 346 l 16 17 l 31 -36" fill="none" stroke="#0F172A" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- wordmark -->
+  <text x="440" y="318" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="168" font-weight="700" letter-spacing="-4" fill="#F8FAFC" textLength="900" lengthAdjust="spacingAndGlyphs">shakedown</text>
+</svg>
