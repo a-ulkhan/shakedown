@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { Command } from 'commander'
 import { platformProfile } from '../config.js'
 import { getDriver, parsePlatform } from '../drivers/index.js'
 import { findAll } from '../drivers/query.js'
 import type { ElementSelector, Platform, UiNode } from '../drivers/types.js'
+import { stitchFrames } from '../evidence/annotate.js'
+import { captureAnnotatedShot } from '../evidence/capture.js'
 import { resolveRoute, renderRouteReverse } from '../map/route.js'
 import { identifyScreen, verifyScreen } from '../map/signature.js'
 import { defaultMapPath, loadEffectiveMap, loadMap, saveMap, validateMap } from '../map/store.js'
@@ -262,6 +266,31 @@ ui.command('screenshot')
     try {
       const path = await getDriver(parsePlatform(opts.platform)).screenshot(opts.device, opts.out)
       console.log(path)
+    } catch (error) {
+      fail(error)
+    }
+  })
+
+ui.command('shot')
+  .description('Screenshot with an optional element highlight + caption (annotated evidence frame). Uses ImageMagick; without it, saves a raw screenshot.')
+  .requiredOption('--platform <platform>', 'ios | android')
+  .requiredOption('--device <id>', 'device UDID/serial')
+  .requiredOption('--out <path>', 'output PNG path')
+  .option('--id <identifier>', 'highlight the element with this accessibility id')
+  .option('--label <label>', 'highlight the element with this label')
+  .option('--value <value>', 'highlight the element with this value')
+  .option('--type <type>', 'narrow the highlighted element by type')
+  .option('--title <text>', 'caption title (default: the selector id/label)')
+  .action(async (opts: PlatformDeviceOpts & { out: string; id?: string; label?: string; value?: string; type?: string; title?: string }) => {
+    try {
+      const driver = getDriver(parsePlatform(opts.platform))
+      const selector = selectorFromOpts(opts)
+      const result = await captureAnnotatedShot(driver, opts.device, opts.out, {
+        ...(Object.keys(selector).length > 0 && { selector }),
+        ...(opts.title !== undefined && { title: opts.title }),
+      })
+      if (result.warning) console.error(`warning: ${result.warning}`)
+      console.log(result.path)
     } catch (error) {
       fail(error)
     }
@@ -569,6 +598,72 @@ runCmd
   .action(async (opts: { dir: string }) => {
     try {
       console.log(JSON.stringify(await loadRun(opts.dir), null, 2))
+    } catch (error) {
+      fail(error)
+    }
+  })
+
+runCmd
+  .command('shot')
+  .description('Capture an annotated step screenshot into the run and record the step in one call')
+  .requiredOption('--dir <dir>', 'run directory from `run start`')
+  .requiredOption('--platform <platform>', 'ios | android')
+  .requiredOption('--device <id>', 'device UDID/serial')
+  .requiredOption('--title <title>', 'what this step shows (also the caption)')
+  .option('--outcome <outcome>', 'pass | fail | info', 'info')
+  .option('--id <identifier>', 'highlight the element with this accessibility id')
+  .option('--label <label>', 'highlight the element with this label')
+  .option('--value <value>', 'highlight the element with this value')
+  .option('--type <type>', 'narrow the highlighted element by type')
+  .action(async (opts: PlatformDeviceOpts & { dir: string; title: string; outcome: string; id?: string; label?: string; value?: string; type?: string }) => {
+    try {
+      if (!['pass', 'fail', 'info'].includes(opts.outcome)) {
+        throw new Error(`invalid outcome "${opts.outcome}"`)
+      }
+      const report = await loadRun(opts.dir)
+      const index = report.steps.length + 1
+      const file = join(opts.dir, `step-${String(index).padStart(2, '0')}.png`)
+      const driver = getDriver(parsePlatform(opts.platform))
+      const selector = selectorFromOpts(opts)
+      const result = await captureAnnotatedShot(driver, opts.device, file, {
+        ...(Object.keys(selector).length > 0 && { selector }),
+        title: opts.title,
+      })
+      if (result.warning) console.error(`warning: ${result.warning}`)
+      const step = await appendStep(opts.dir, {
+        title: opts.title,
+        outcome: opts.outcome as StepOutcome,
+        screenshot: file,
+        detail: { annotated: result.annotated, ...selector },
+      })
+      console.log(JSON.stringify(step, null, 2))
+    } catch (error) {
+      fail(error)
+    }
+  })
+
+runCmd
+  .command('export')
+  .description("Stitch a run's step screenshots into a captioned walkthrough (MP4 or GIF). Needs ffmpeg.")
+  .requiredOption('--dir <dir>', 'run directory from `run start`')
+  .option('--out <path>', 'output file (default: <dir>/evidence.mp4 or .gif)')
+  .option('--seconds <n>', 'seconds per step', '3')
+  .option('--gif', 'export an animated GIF instead of MP4')
+  .action(async (opts: { dir: string; out?: string; seconds: string; gif?: boolean }) => {
+    try {
+      const report = await loadRun(opts.dir)
+      const frames = report.steps
+        .filter((step) => step.screenshot)
+        .map((step) => {
+          const shot = step.screenshot as string
+          const candidate = resolve(opts.dir, shot)
+          return { path: existsSync(candidate) ? candidate : shot, seconds: Number(opts.seconds) }
+        })
+        .filter((frame) => existsSync(frame.path))
+      if (frames.length === 0) throw new Error('no step screenshots to export in this run')
+      const out = opts.out ?? join(opts.dir, opts.gif ? 'evidence.gif' : 'evidence.mp4')
+      await stitchFrames({ frames, out, ...(opts.gif !== undefined && { gif: opts.gif }) })
+      console.log(out)
     } catch (error) {
       fail(error)
     }

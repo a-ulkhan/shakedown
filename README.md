@@ -54,6 +54,7 @@ Both drivers normalize to the same `UiNode` shape, so everything above the drive
 - Node.js 20+
 - iOS: `brew install cameroncooke/axe/axe`
 - Android: `adb` on PATH or a standard SDK location (`ANDROID_HOME`, `~/Library/Android/sdk`, `~/Android/Sdk`)
+- Optional (annotated evidence only): `brew install imagemagick ffmpeg` — `ui shot` highlights/captions need ImageMagick, `run export` needs ffmpeg. Without them, capture still works; annotation is skipped with a warning.
 
 ## Install
 
@@ -83,6 +84,16 @@ shakedown ui type --platform android --device emulator-5554 --text "hello"
 shakedown ui screenshot --platform ios --device <UDID> --out welcome.png
 shakedown ui record start --platform ios --device <UDID> --out run.mp4
 shakedown ui record stop  --platform ios --device <UDID>
+
+# annotated evidence — screenshot with the element highlighted + captioned by its id
+shakedown ui shot --platform ios --device <UDID> --out from.png \
+  --id id_button_transfers_betweenOwnFromAccount --title "From account"
+
+# evidence runs — capture + annotate + record a step in one call, then stitch a captioned walkthrough
+shakedown run start --name betweenown-ids --root .
+shakedown run shot --dir <run-dir> --platform ios --device <UDID> \
+  --title "From account" --outcome pass --id id_button_transfers_betweenOwnFromAccount
+shakedown run export --dir <run-dir>              # -> <run-dir>/evidence.mp4  (add --gif for a GIF)
 
 # navigation map
 shakedown map route loans --platform ios      # how do I get to the Loans screen?
