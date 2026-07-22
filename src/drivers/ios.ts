@@ -22,7 +22,9 @@ interface AxeNode {
   role?: string
   AXLabel?: string | null
   AXUniqueId?: string | null
-  AXValue?: string | null
+  // axe emits a non-string AXValue for value-bearing controls (sliders -> number,
+  // switches -> 0/1, steppers, progress), so this is not always a string.
+  AXValue?: string | number | boolean | null
   enabled?: boolean
   frame?: { x: number; y: number; width: number; height: number }
   children?: AxeNode[]
@@ -90,8 +92,7 @@ export class IosDriver implements Driver {
 
   async describeUi(deviceId: string): Promise<UiNode[]> {
     const { stdout } = await run('axe', ['describe-ui', '--udid', deviceId])
-    const roots = JSON.parse(stdout) as AxeNode[]
-    return roots.map((node) => normalizeAxeNode(node))
+    return parseAxeTree(stdout)
   }
 
   async tap(deviceId: string, target: Point | ElementSelector): Promise<void> {
@@ -169,6 +170,11 @@ export class IosDriver implements Driver {
   }
 }
 
+export function parseAxeTree(stdout: string): UiNode[] {
+  const roots = JSON.parse(stdout) as AxeNode[]
+  return roots.map((node) => normalizeAxeNode(node))
+}
+
 function normalizeAxeNode(node: AxeNode): UiNode {
   return {
     type: node.type ?? node.role ?? 'Unknown',
@@ -181,8 +187,9 @@ function normalizeAxeNode(node: AxeNode): UiNode {
   }
 }
 
-function emptyToUndefined(value: string | null | undefined): string | undefined {
+function emptyToUndefined(value: string | number | boolean | null | undefined): string | undefined {
   if (value === null || value === undefined) return undefined
-  const trimmed = value.trim()
+  const str = typeof value === 'string' ? value : String(value)
+  const trimmed = str.trim()
   return trimmed.length > 0 ? trimmed : undefined
 }
