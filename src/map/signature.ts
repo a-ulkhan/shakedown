@@ -91,6 +91,76 @@ export interface VerifyResult {
   missed: SignatureCue[]
 }
 
+// ---------------------------------------------------------------------------
+// signature derivation — pick 2-4 distinctive, stable cues from a live tree
+
+/** Generic navigation/action chrome that appears on many screens — never distinctive. */
+const CHROME_LABELS = new Set([
+  'back', 'cancel', 'done', 'close', 'next', 'continue', 'skip', 'save',
+  'ok', 'allow', "don't allow", 'dismiss', 'edit', 'search', 'submit',
+])
+
+/** A cue value is dynamic (per-run / per-entity) if it looks like data, not a fixed string. */
+export function isDynamicCueValue(value: string): boolean {
+  const s = value.trim()
+  if (s.length === 0 || s.length > 40) return true
+  if (/[₾€$£¥₽]/.test(s)) return true // currency amounts
+  if (/[0-9a-f]{12,}/i.test(s)) return true // long hex / uuid / hash ids
+  if (/\d{2,}/.test(s)) return true // 2+ consecutive digits: amounts, times, dates
+  if (/_\d+(_\d+)*$/.test(s)) return true // indexed identifiers e.g. cell_0_0
+  return false
+}
+
+function isChrome(cue: SignatureCue): boolean {
+  const v = cue.value.toLowerCase()
+  if (cue.kind === 'a11yId') return /navigation_button/.test(v) || v.endsWith('_back') || v.endsWith('_close')
+  return CHROME_LABELS.has(v)
+}
+
+/** The single best cue a node can contribute, strongest kind first, or none if all are dynamic. */
+function candidateCue(node: UiNode): SignatureCue | undefined {
+  if (node.identifier && !isDynamicCueValue(node.identifier)) return { kind: 'a11yId', value: node.identifier }
+  if (node.label && !isDynamicCueValue(node.label)) return { kind: 'label', value: node.label }
+  if (node.value && !isDynamicCueValue(node.value)) return { kind: 'text', value: node.value }
+  return undefined
+}
+
+/**
+ * Derive up to `max` stable, distinctive signature cues from a flattened live
+ * tree. Skips dynamic-looking values, generic nav chrome, and any cue already
+ * used by another screen (pass `exclude` = "kind:value" strings from the rest
+ * of the map). Ranks by cue strength (a11yId > label > text), then top-of-screen
+ * first as a tie-break. Returns [] when nothing stable survives.
+ */
+export function deriveSignature(
+  nodes: UiNode[],
+  options: { max?: number; exclude?: Set<string> } = {}
+): SignatureCue[] {
+  const max = options.max ?? 3
+  const exclude = options.exclude ?? new Set<string>()
+  const candidates: Array<{ cue: SignatureCue; y: number }> = []
+  for (const node of nodes) {
+    const cue = candidateCue(node)
+    if (!cue || isChrome(cue)) continue
+    if (exclude.has(`${cue.kind}:${cue.value}`)) continue
+    candidates.push({ cue, y: node.frame.y })
+  }
+  candidates.sort((a, b) => {
+    const byWeight = CUE_WEIGHTS[b.cue.kind] - CUE_WEIGHTS[a.cue.kind]
+    return byWeight !== 0 ? byWeight : a.y - b.y
+  })
+  const seen = new Set<string>()
+  const out: SignatureCue[] = []
+  for (const { cue } of candidates) {
+    const key = `${cue.kind}:${cue.value}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(cue)
+    if (out.length >= max) break
+  }
+  return out
+}
+
 /** Check whether the current UI matches one specific screen's signature. */
 export function verifyScreen(map: NavigationMap, screenId: string, roots: UiNode[]): VerifyResult {
   const screen = map.screens[screenId]

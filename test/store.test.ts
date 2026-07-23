@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mergeMaps, validateMap, emptyMap } from '../src/map/store.js'
+import { mergeInto, mergeMaps, parseVia, validateMap, emptyMap } from '../src/map/store.js'
 import type { NavigationMap } from '../src/map/types.js'
 
 function baseMap(platform: NavigationMap['platform']): NavigationMap {
@@ -54,6 +54,58 @@ describe('mergeMaps', () => {
     const merged = mergeMaps(shared, ios)
     expect(merged.edges).toHaveLength(1)
     expect(merged.screens.settings).toBeDefined()
+  })
+})
+
+describe('mergeInto', () => {
+  it('unions anchors and screens and dedups anchors', () => {
+    const map = baseMap('ios')
+    mergeInto(map, {
+      anchors: ['home', 'loans'],
+      screens: { loans: { name: 'Loans', signature: [{ kind: 'label', value: 'Loans' }] } },
+    })
+    expect(map.anchors).toEqual(['home', 'loans'])
+    expect(map.screens.loans).toBeDefined()
+  })
+
+  it('overwrites an edge with the same (from, to, action kind) instead of duplicating', () => {
+    const map = baseMap('ios')
+    map.screens.loans = { name: 'Loans', signature: [] }
+    map.edges.push({ from: 'home', to: 'loans', action: { kind: 'tap', target: { kind: 'label', value: 'old' } }, health: 'stale' })
+    mergeInto(map, {
+      edges: [{ from: 'home', to: 'loans', action: { kind: 'tap', target: { kind: 'label', value: 'new' } }, health: 'ok' }],
+    })
+    expect(map.edges).toHaveLength(1)
+    expect(map.edges[0]?.health).toBe('ok')
+    expect(map.edges[0]?.action.target?.value).toBe('new')
+  })
+
+  it('appends an edge that differs by action kind', () => {
+    const map = baseMap('ios')
+    map.screens.loans = { name: 'Loans', signature: [] }
+    map.edges.push({ from: 'home', to: 'loans', action: { kind: 'tap' }, health: 'ok' })
+    mergeInto(map, { edges: [{ from: 'home', to: 'loans', action: { kind: 'swipe', argument: 'up' }, health: 'ok' }] })
+    expect(map.edges).toHaveLength(2)
+  })
+})
+
+describe('parseVia', () => {
+  it('parses tap targets (bare id, id=, label=, text=)', () => {
+    expect(parseVia('tap:id_button_x')).toEqual({ kind: 'tap', target: { kind: 'a11yId', value: 'id_button_x' } })
+    expect(parseVia('tap:id=id_x')).toEqual({ kind: 'tap', target: { kind: 'a11yId', value: 'id_x' } })
+    expect(parseVia('tap:label=New transfer')).toEqual({ kind: 'tap', target: { kind: 'label', value: 'New transfer' } })
+    expect(parseVia('tap:text=Continue')).toEqual({ kind: 'tap', target: { kind: 'text', value: 'Continue' } })
+  })
+
+  it('parses swipe directions and type', () => {
+    expect(parseVia('swipe:down')).toEqual({ kind: 'swipe', argument: 'down' })
+    expect(parseVia('type:010203')).toEqual({ kind: 'type', argument: '010203' })
+  })
+
+  it('throws on garbage and bad directions', () => {
+    expect(() => parseVia('tap:')).toThrow()
+    expect(() => parseVia('swipe:sideways')).toThrow()
+    expect(() => parseVia('frobnicate:x')).toThrow(/unknown --via kind/)
   })
 })
 

@@ -6,13 +6,23 @@ import { Command } from 'commander'
 import { platformProfile } from '../config.js'
 import { getDriver, parsePlatform } from '../drivers/index.js'
 import { findAll } from '../drivers/query.js'
+import { describeStable } from '../drivers/stable.js'
 import type { ElementSelector, Platform, UiNode } from '../drivers/types.js'
 import { stitchFrames } from '../evidence/annotate.js'
 import { captureAnnotatedShot } from '../evidence/capture.js'
 import { resolveRoute, renderRouteReverse } from '../map/route.js'
-import { identifyScreen, verifyScreen } from '../map/signature.js'
-import { defaultMapPath, loadEffectiveMap, loadMap, saveMap, validateMap } from '../map/store.js'
-import type { EdgeHealth } from '../map/types.js'
+import { deriveSignature, flattenNodes, identifyScreen, verifyScreen } from '../map/signature.js'
+import {
+  defaultMapPath,
+  emptyMap,
+  loadEffectiveMap,
+  loadMap,
+  mergeInto,
+  parseVia,
+  saveMap,
+  validateMap,
+} from '../map/store.js'
+import type { Edge, EdgeHealth, ScreenNode } from '../map/types.js'
 import { saveRecordingHandle, takeRecordingHandle } from '../run/recording-state.js'
 import { appendStep, finishRun, loadRun, recordMapEdit, startRun } from '../run/session.js'
 import type { RunStatus, StepOutcome } from '../run/session.js'
@@ -163,9 +173,15 @@ ui.command('describe')
   .requiredOption('--platform <platform>', 'ios | android')
   .requiredOption('--device <id>', 'device UDID/serial')
   .option('--flat', 'flatten to a list of nodes with frames')
-  .action(async (opts: PlatformDeviceOpts & { flat?: boolean }) => {
+  .option('--wait-stable', 'poll until the screen stops changing before reading')
+  .option('--settle <ms>', 'quiet period the tree must hold (needs --wait-stable)', '400')
+  .option('--timeout <ms>', 'max wait before giving up (needs --wait-stable)', '5000')
+  .action(async (opts: PlatformDeviceOpts & { flat?: boolean; waitStable?: boolean; settle: string; timeout: string }) => {
     try {
-      const roots = await getDriver(parsePlatform(opts.platform)).describeUi(opts.device)
+      const driver = getDriver(parsePlatform(opts.platform))
+      const roots = opts.waitStable
+        ? await describeStable(driver, opts.device, { settleMs: Number(opts.settle), timeoutMs: Number(opts.timeout) })
+        : await driver.describeUi(opts.device)
       const data = opts.flat ? flatten(roots) : roots
       console.log(JSON.stringify(data, null, 2))
     } catch (error) {
@@ -181,9 +197,15 @@ ui.command('find')
   .option('--label <label>', 'accessibility label / content-desc')
   .option('--value <value>', 'element value / text')
   .option('--type <type>', 'element type (Button, TextField, ...)')
-  .action(async (opts: PlatformDeviceOpts & { id?: string; label?: string; value?: string; type?: string }) => {
+  .option('--wait-stable', 'poll until the screen stops changing before reading')
+  .option('--settle <ms>', 'quiet period the tree must hold (needs --wait-stable)', '400')
+  .option('--timeout <ms>', 'max wait before giving up (needs --wait-stable)', '5000')
+  .action(async (opts: PlatformDeviceOpts & { id?: string; label?: string; value?: string; type?: string; waitStable?: boolean; settle: string; timeout: string }) => {
     try {
-      const roots = await getDriver(parsePlatform(opts.platform)).describeUi(opts.device)
+      const driver = getDriver(parsePlatform(opts.platform))
+      const roots = opts.waitStable
+        ? await describeStable(driver, opts.device, { settleMs: Number(opts.settle), timeoutMs: Number(opts.timeout) })
+        : await driver.describeUi(opts.device)
       const matches = findAll(roots, selectorFromOpts(opts)).map((node) => ({
         ...node,
         children: undefined,
@@ -227,10 +249,13 @@ ui.command('type')
   .requiredOption('--platform <platform>', 'ios | android')
   .requiredOption('--device <id>', 'device UDID/serial')
   .requiredOption('--text <text>', 'text to type')
-  .action(async (opts: PlatformDeviceOpts & { text: string }) => {
+  .option('--clear', 'clear the focused field before typing (select-all + delete)')
+  .action(async (opts: PlatformDeviceOpts & { text: string; clear?: boolean }) => {
     try {
-      await getDriver(parsePlatform(opts.platform)).typeText(opts.device, opts.text)
-      console.log('typed')
+      const driver = getDriver(parsePlatform(opts.platform))
+      if (opts.clear) await driver.clearField(opts.device)
+      await driver.typeText(opts.device, opts.text)
+      console.log(opts.clear ? 'cleared + typed' : 'typed')
     } catch (error) {
       fail(error)
     }
@@ -403,25 +428,75 @@ map
         screens?: NavigationMapScreens
         edges?: NavigationMapEdges
       }
-      const { existsSync } = await import('node:fs')
-      const { emptyMap } = await import('../map/store.js')
       const platform = opts.platform === 'shared' ? 'shared' : parsePlatform(opts.platform)
       const current = existsSync(opts.file) ? await loadMap(opts.file) : emptyMap(opts.app, platform)
-
-      current.anchors = [...new Set([...current.anchors, ...(partial.anchors ?? [])])]
-      Object.assign(current.screens, partial.screens ?? {})
-      for (const edge of partial.edges ?? []) {
-        const index = current.edges.findIndex(
-          (existing) =>
-            existing.from === edge.from &&
-            existing.to === edge.to &&
-            existing.action.kind === edge.action.kind
-        )
-        if (index >= 0) current.edges[index] = edge
-        else current.edges.push(edge)
-      }
+      mergeInto(current, partial)
       await saveMap(opts.file, current)
       console.log(`saved ${opts.file} (${Object.keys(current.screens).length} screens, ${current.edges.length} edges)`)
+    } catch (error) {
+      fail(error)
+    }
+  })
+
+map
+  .command('capture-current <screenId>')
+  .description('Capture the current on-device screen into the map: auto-derive its signature and append it (+ optional edge)')
+  .requiredOption('--platform <platform>', 'ios | android')
+  .requiredOption('--device <id>', 'device UDID/serial')
+  .requiredOption('--name <name>', 'human-readable screen name')
+  .option('--root <dir>', 'app repo root containing .shakedown/maps', process.cwd())
+  .option('--file <path>', 'map file (overrides the --root/--platform default)')
+  .option('--app <id>', 'app id (required only when creating a new map)')
+  .option('--from <screen>', 'source screen for an edge into this screen (needs --via)')
+  .option('--via <spec>', 'edge action: tap:<id> | tap:label=Foo | tap:text=Foo | swipe:down')
+  .option('--anchor', 'mark this screen as an anchor (reachable from app launch)')
+  .option('--notes <text>', 'notes to attach to the screen')
+  .option('--max-cues <n>', 'max signature cues to derive', '3')
+  .option('--no-wait', 'skip waiting for the screen to settle before reading')
+  .option('--force', 'save even when no stable signature could be derived')
+  .action(async (screenId: string, opts: PlatformDeviceOpts & {
+    name: string; root: string; file?: string; app?: string; from?: string; via?: string;
+    anchor?: boolean; notes?: string; maxCues: string; wait: boolean; force?: boolean
+  }) => {
+    try {
+      const platform = parsePlatform(opts.platform)
+      const file = opts.file ?? defaultMapPath(opts.root, platform)
+      const driver = getDriver(platform)
+      const roots = opts.wait === false
+        ? await driver.describeUi(opts.device)
+        : await describeStable(driver, opts.device)
+
+      if (!existsSync(file) && !opts.app) {
+        throw new Error(`no map at ${file} yet — pass --app <id> to create it`)
+      }
+      const current = existsSync(file) ? await loadMap(file) : emptyMap(opts.app as string, platform)
+
+      const exclude = new Set<string>()
+      for (const [id, s] of Object.entries(current.screens)) {
+        if (id === screenId) continue
+        for (const cue of s.signature) exclude.add(`${cue.kind}:${cue.value}`)
+      }
+      const signature = deriveSignature(flattenNodes(roots), { max: Number(opts.maxCues), exclude })
+      if (signature.length === 0 && !opts.force) {
+        throw new Error('could not derive a stable signature (candidates looked dynamic); add cues manually or pass --force')
+      }
+
+      if ((opts.from && !opts.via) || (!opts.from && opts.via)) {
+        throw new Error('--from and --via must be given together')
+      }
+      const screen: ScreenNode = { name: opts.name, signature, ...(opts.notes ? { notes: opts.notes } : {}) }
+      const edges: Edge[] = opts.from && opts.via
+        ? [{ from: opts.from, to: screenId, action: parseVia(opts.via), health: 'ok', verified_at: new Date().toISOString() }]
+        : []
+      mergeInto(current, {
+        screens: { [screenId]: screen },
+        anchors: opts.anchor ? [screenId] : [],
+        edges,
+      })
+      await saveMap(file, current)
+      const cues = signature.map((c) => `${c.kind}=${c.value}`).join(', ') || '(none)'
+      console.log(`captured "${screenId}" [${cues}]`)
+      console.log(`saved ${file} (${Object.keys(current.screens).length} screens, ${current.edges.length} edges)`)
     } catch (error) {
       fail(error)
     }

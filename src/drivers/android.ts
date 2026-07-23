@@ -106,6 +106,13 @@ export class AndroidDriver implements Driver {
     await run(adbPath(), ['-s', deviceId, 'shell', 'input', 'text', escaped])
   }
 
+  async clearField(_deviceId: string): Promise<void> {
+    // Android has no reliable single-shot clear: `input keyevent` can't express a
+    // select-all chord, and a blind run of DEL keyevents risks eating content
+    // behind a mis-focused field. Refuse rather than ship a flaky best-effort.
+    throw new Error('clearField is not supported on Android yet; clear the field manually')
+  }
+
   async swipe(deviceId: string, from: Point, to: Point, durationMs = 300): Promise<void> {
     await run(adbPath(), [
       '-s', deviceId, 'shell', 'input', 'swipe',

@@ -126,6 +126,14 @@ export class IosDriver implements Driver {
     await run('axe', ['type', text, '--udid', deviceId])
   }
 
+  async clearField(deviceId: string): Promise<void> {
+    // Select-all then delete. HID usage codes: modifier 227 = Left GUI (Command),
+    // key 4 = 'a', key 42 = Delete/Backspace. Assumes a field is focused (the
+    // caller taps it first), same precondition as typeText.
+    await run('axe', ['key-combo', '--modifiers', '227', '--key', '4', '--udid', deviceId])
+    await run('axe', ['key', '42', '--udid', deviceId])
+  }
+
   async swipe(deviceId: string, from: Point, to: Point, durationMs = 300): Promise<void> {
     await run('axe', [
       'swipe',

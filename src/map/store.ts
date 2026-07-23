@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { Platform } from '../drivers/types.js'
-import { MAP_SCHEMA_VERSION, type Edge, type NavigationMap, type ScreenNode } from './types.js'
+import { MAP_SCHEMA_VERSION, type Edge, type EdgeAction, type NavigationMap, type ScreenNode } from './types.js'
 
 /**
  * Maps live inside the app repo by default (committable, team-shareable):
@@ -39,6 +39,64 @@ export async function loadMap(path: string): Promise<NavigationMap> {
 export async function saveMap(path: string, map: NavigationMap): Promise<void> {
   await mkdir(dirname(path), { recursive: true })
   await writeFile(path, `${JSON.stringify(map, null, 2)}\n`, 'utf-8')
+}
+
+export interface PartialMap {
+  anchors?: string[]
+  screens?: Record<string, ScreenNode>
+  edges?: Edge[]
+}
+
+/**
+ * Merge a partial map into `current` IN PLACE (mutates, matching `map upsert`'s
+ * historical behavior): anchors and screens are unioned; edges are keyed by
+ * (from, to, action.kind) so re-capturing an edge overwrites rather than dups.
+ * Returns `current` for convenience.
+ */
+export function mergeInto(current: NavigationMap, partial: PartialMap): NavigationMap {
+  current.anchors = [...new Set([...current.anchors, ...(partial.anchors ?? [])])]
+  Object.assign(current.screens, partial.screens ?? {})
+  for (const edge of partial.edges ?? []) {
+    const index = current.edges.findIndex(
+      (existing) =>
+        existing.from === edge.from &&
+        existing.to === edge.to &&
+        existing.action.kind === edge.action.kind
+    )
+    if (index >= 0) current.edges[index] = edge
+    else current.edges.push(edge)
+  }
+  return current
+}
+
+/**
+ * Parse an edge action shorthand for the CLI:
+ *   tap:<id> | tap:id=<id> | tap:label=<text> | tap:text=<text>
+ *   swipe:up|down|left|right
+ *   type:<text>
+ */
+export function parseVia(spec: string): EdgeAction {
+  const sep = spec.indexOf(':')
+  const kind = (sep >= 0 ? spec.slice(0, sep) : spec).trim()
+  const arg = sep >= 0 ? spec.slice(sep + 1) : ''
+  switch (kind) {
+    case 'tap': {
+      if (!arg) throw new Error('--via tap needs a target, e.g. tap:id_button_x or tap:label=Foo')
+      if (arg.startsWith('label=')) return { kind: 'tap', target: { kind: 'label', value: arg.slice(6) } }
+      if (arg.startsWith('text=')) return { kind: 'tap', target: { kind: 'text', value: arg.slice(5) } }
+      if (arg.startsWith('id=')) return { kind: 'tap', target: { kind: 'a11yId', value: arg.slice(3) } }
+      return { kind: 'tap', target: { kind: 'a11yId', value: arg } }
+    }
+    case 'swipe':
+      if (!['up', 'down', 'left', 'right'].includes(arg)) {
+        throw new Error('--via swipe needs a direction: swipe:up|down|left|right')
+      }
+      return { kind: 'swipe', argument: arg }
+    case 'type':
+      return { kind: 'type', argument: arg }
+    default:
+      throw new Error(`unknown --via kind "${kind}" (expected tap, swipe, or type)`)
+  }
 }
 
 /**

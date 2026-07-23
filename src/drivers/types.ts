@@ -73,6 +73,8 @@ export interface Driver {
   describeUi(deviceId: string): Promise<UiNode[]>
   tap(deviceId: string, target: Point | ElementSelector): Promise<void>
   typeText(deviceId: string, text: string): Promise<void>
+  /** Clear the currently focused text field (select-all + delete). */
+  clearField(deviceId: string): Promise<void>
   swipe(deviceId: string, from: Point, to: Point, durationMs?: number): Promise<void>
   screenshot(deviceId: string, outputPath: string): Promise<string>
 
