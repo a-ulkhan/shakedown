@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Platform } from './drivers/types.js'
+import type { EvidenceStyle } from './evidence/render.js'
 
 /**
  * App profile: how to build, install, and launch the app under test.
@@ -23,6 +24,8 @@ export interface PlatformProfile {
 export interface ShakedownConfig {
   ios?: PlatformProfile
   android?: PlatformProfile
+  /** evidence rendering styles, keyed by name (`run render --style <name>`) */
+  evidence?: { styles?: Record<string, EvidenceStyle> }
 }
 
 export function configPath(rootDir: string): string {
@@ -45,6 +48,9 @@ export async function loadConfig(rootDir: string): Promise<ShakedownConfig> {
     ...(base.ios || local.ios ? { ios: { ...base.ios, ...local.ios } as PlatformProfile } : {}),
     ...(base.android || local.android
       ? { android: { ...base.android, ...local.android } as PlatformProfile }
+      : {}),
+    ...(base.evidence || local.evidence
+      ? { evidence: { styles: { ...base.evidence?.styles, ...local.evidence?.styles } } }
       : {}),
   }
 }

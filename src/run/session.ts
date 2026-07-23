@@ -16,6 +16,8 @@ export interface RunStep {
   at: string
   screenshot?: string
   detail?: unknown
+  /** marked as a key frame for rendered evidence (`run shot --key`) */
+  key?: boolean
 }
 
 export interface RunReport {
@@ -68,7 +70,7 @@ async function saveRun(runDir: string, report: RunReport): Promise<void> {
 
 export async function appendStep(
   runDir: string,
-  step: { title: string; outcome: StepOutcome; screenshot?: string; detail?: unknown }
+  step: { title: string; outcome: StepOutcome; screenshot?: string; detail?: unknown; key?: boolean }
 ): Promise<RunStep> {
   const report = await loadRun(runDir)
   const entry: RunStep = {
@@ -78,6 +80,7 @@ export async function appendStep(
     at: new Date().toISOString(),
     ...(step.screenshot !== undefined && { screenshot: step.screenshot }),
     ...(step.detail !== undefined && { detail: step.detail }),
+    ...(step.key !== undefined && { key: step.key }),
   }
   report.steps.push(entry)
   await saveRun(runDir, report)

@@ -177,6 +177,42 @@ Each `/test` run produces a directory under `.shakedown/runs/`:
 └── 02_loans_verified.png
 ```
 
+### Rendering publishable evidence
+
+`run render` turns a finished run into an MR-ready markdown document: a step
+summary table, a compressed screen recording, and a captioned key-frame grid.
+
+```bash
+# mark the frames worth showing while you drive
+shakedown run shot --dir "$RUN" --key --title "Swipe actions render" ...
+
+# render locally (evidence.md + evidence_480p.mp4 in the run dir)
+shakedown run render --dir "$RUN"
+
+# render and upload assets, links substituted (GITLAB_TOKEN + GITLAB_URL from env)
+shakedown run render --dir "$RUN" --uploader gitlab --project group/repo
+```
+
+Layout is configurable per project in `.shakedown/config.json`:
+
+```jsonc
+"evidence": {
+  "styles": {
+    "mr-evidence": {
+      "video": { "maxWidth": 480, "fps": 12, "crf": 33 },
+      "keyframes": "marked",            // or "all" | "failures-only"
+      "grid": { "columns": 3, "captions": true },
+      "sections": ["summary-table", "video", "keyframe-grid", "failures"]
+    }
+  }
+}
+```
+
+Pick a style with `--style mr-evidence`, or pass `--template file.md` with
+`{{name}}`, `{{status}}`, `{{summary-table}}`, `{{video}}`, `{{keyframe-grid}}`
+and `{{failures}}` placeholders for a fully custom layout. Uploaders are
+pluggable; GitLab (project uploads API) ships first.
+
 ## Prior art and credits
 
 - [DroidBot](https://github.com/honeynet/droidbot) pioneered the UI transition graph this map format descends from.

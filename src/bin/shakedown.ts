@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { Command } from 'commander'
-import { platformProfile } from '../config.js'
+import { loadConfig, platformProfile } from '../config.js'
 import { getDriver, parsePlatform } from '../drivers/index.js'
 import { findAll } from '../drivers/query.js'
 import { describeStable } from '../drivers/stable.js'
@@ -26,6 +26,9 @@ import type { Edge, EdgeHealth, ScreenNode } from '../map/types.js'
 import { saveRecordingHandle, takeRecordingHandle } from '../run/recording-state.js'
 import { appendStep, finishRun, loadRun, recordMapEdit, startRun } from '../run/session.js'
 import type { RunStatus, StepOutcome } from '../run/session.js'
+import { loadTemplate, renderRun, writeEvidence } from '../evidence/render.js'
+import type { EvidenceStyle } from '../evidence/render.js'
+import { gitlabUploaderFromEnv, uploadEvidence } from '../evidence/upload.js'
 
 const program = new Command()
   .name('shakedown')
@@ -690,7 +693,8 @@ runCmd
   .option('--label <label>', 'highlight the element with this label')
   .option('--value <value>', 'highlight the element with this value')
   .option('--type <type>', 'narrow the highlighted element by type')
-  .action(async (opts: PlatformDeviceOpts & { dir: string; title: string; outcome: string; id?: string; label?: string; value?: string; type?: string }) => {
+  .option('--key', 'mark this step as a key frame for rendered evidence')
+  .action(async (opts: PlatformDeviceOpts & { dir: string; title: string; outcome: string; id?: string; label?: string; value?: string; type?: string; key?: boolean }) => {
     try {
       if (!['pass', 'fail', 'info'].includes(opts.outcome)) {
         throw new Error(`invalid outcome "${opts.outcome}"`)
@@ -710,8 +714,46 @@ runCmd
         outcome: opts.outcome as StepOutcome,
         screenshot: file,
         detail: { annotated: result.annotated, ...selector },
+        ...(opts.key !== undefined && { key: opts.key }),
       })
       console.log(JSON.stringify(step, null, 2))
+    } catch (error) {
+      fail(error)
+    }
+  })
+
+runCmd
+  .command('render')
+  .description('Render a run into publishable markdown evidence (summary table, compressed video, key frames)')
+  .requiredOption('--dir <dir>', 'run directory from `run start`')
+  .option('--style <name>', 'style from .shakedown/config.json evidence.styles (default: built-in)')
+  .option('--root <dir>', 'app repo root holding .shakedown/config.json', process.cwd())
+  .option('--template <path>', 'custom layout file with {{section}} placeholders')
+  .option('--out <path>', 'output markdown path (default: <dir>/evidence.md)')
+  .option('--uploader <name>', 'upload assets and substitute links: gitlab | none', 'none')
+  .option('--project <path>', 'uploader project, e.g. group/repo (required for gitlab)')
+  .action(async (opts: { dir: string; style?: string; root: string; template?: string; out?: string; uploader: string; project?: string }) => {
+    try {
+      let style: EvidenceStyle = {}
+      if (opts.style) {
+        const config = await loadConfig(opts.root)
+        const named = config.evidence?.styles?.[opts.style]
+        if (!named) throw new Error(`no evidence style "${opts.style}" in .shakedown/config.json`)
+        style = named
+      }
+      const template = opts.template ? await loadTemplate(opts.template) : undefined
+      let result = await renderRun(opts.dir, style, {
+        ...(template !== undefined && { template }),
+      })
+      for (const warning of result.warnings) console.error(`warning: ${warning}`)
+      if (opts.uploader === 'gitlab') {
+        if (!opts.project) throw new Error('--project is required with --uploader gitlab')
+        result = await uploadEvidence(result, gitlabUploaderFromEnv(opts.project))
+      } else if (opts.uploader !== 'none') {
+        throw new Error(`unknown uploader "${opts.uploader}"`)
+      }
+      const path = await writeEvidence(opts.dir, result, opts.out)
+      console.log(path)
     } catch (error) {
       fail(error)
     }
