@@ -1,5 +1,22 @@
-import { describe, expect, it } from 'vitest'
-import { mergeInto, mergeMaps, parseVia, validateMap, emptyMap } from '../src/map/store.js'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import {
+  defaultMapPath,
+  emptyMap,
+  loadEffectiveMap,
+  loadMap,
+  mapTierPaths,
+  mergeInto,
+  mergeMaps,
+  parseVia,
+  promoteUserMap,
+  saveMap,
+  userMapPath,
+  validateMap,
+} from '../src/map/store.js'
 import type { NavigationMap } from '../src/map/types.js'
 
 function baseMap(platform: NavigationMap['platform']): NavigationMap {
@@ -106,6 +123,100 @@ describe('parseVia', () => {
     expect(() => parseVia('tap:')).toThrow()
     expect(() => parseVia('swipe:sideways')).toThrow()
     expect(() => parseVia('frobnicate:x')).toThrow(/unknown --via kind/)
+  })
+})
+
+describe('user-level store', () => {
+  const APP = 'com.example.demo'
+  let root: string
+  let home: string
+  let savedHome: string | undefined
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'shakedown-root-'))
+    home = await mkdtemp(join(tmpdir(), 'shakedown-home-'))
+    savedHome = process.env.SHAKEDOWN_HOME
+    process.env.SHAKEDOWN_HOME = home
+  })
+
+  afterEach(async () => {
+    if (savedHome === undefined) delete process.env.SHAKEDOWN_HOME
+    else process.env.SHAKEDOWN_HOME = savedHome
+    await rm(root, { recursive: true, force: true })
+    await rm(home, { recursive: true, force: true })
+  })
+
+  it('userMapPath keys by appId under SHAKEDOWN_HOME', () => {
+    expect(userMapPath(APP, 'ios')).toBe(join(home, 'maps', APP, 'ios.map.json'))
+  })
+
+  it('mapTierPaths orders repo shared → repo platform → user shared → user platform', () => {
+    expect(mapTierPaths(root, 'ios', APP)).toEqual([
+      defaultMapPath(root, 'shared'),
+      defaultMapPath(root, 'ios'),
+      userMapPath(APP, 'shared'),
+      userMapPath(APP, 'ios'),
+    ])
+    expect(mapTierPaths(root, 'ios')).toHaveLength(2) // no appId → no user tiers
+  })
+
+  it('loadEffectiveMap merges the user tier on top of the repo tier (user wins)', async () => {
+    const repo = baseMap('ios')
+    repo.screens.loans = { name: 'Loans (repo)', signature: [{ kind: 'label', value: 'Loans' }] }
+    await saveMap(defaultMapPath(root, 'ios'), repo)
+
+    const user = emptyMap(APP, 'ios')
+    user.screens.loans = { name: 'Loans (user)', signature: [{ kind: 'a11yId', value: 'id_loans' }] }
+    user.screens.transfers = { name: 'Transfers', signature: [{ kind: 'label', value: 'Transfers' }] }
+    await saveMap(userMapPath(APP, 'ios'), user)
+
+    const merged = await loadEffectiveMap(root, 'ios', APP)
+    expect(merged.screens.loans?.name).toBe('Loans (user)')
+    expect(merged.screens.transfers).toBeDefined()
+    expect(merged.screens.home).toBeDefined() // repo-only screen survives
+    expect(merged.platform).toBe('ios')
+  })
+
+  it('loadEffectiveMap works with only a user-level map', async () => {
+    await saveMap(userMapPath(APP, 'ios'), baseMap('ios'))
+    const merged = await loadEffectiveMap(root, 'ios', APP)
+    expect(merged.screens.home).toBeDefined()
+  })
+
+  it('loadEffectiveMap lists both stores in the not-found error when appId is known', async () => {
+    await expect(loadEffectiveMap(root, 'ios', APP)).rejects.toThrow(/\.shakedown.*or.*maps/)
+  })
+
+  it('promoteUserMap merges into the repo map and removes the user copy', async () => {
+    const repo = baseMap('ios')
+    await saveMap(defaultMapPath(root, 'ios'), repo)
+
+    const user = emptyMap(APP, 'ios')
+    user.screens.loans = { name: 'Loans', signature: [{ kind: 'label', value: 'Loans' }] }
+    user.edges.push({ from: 'home', to: 'loans', action: { kind: 'tap' }, health: 'ok' })
+    await saveMap(userMapPath(APP, 'ios'), user)
+
+    const result = await promoteUserMap(root, 'ios', APP)
+    expect(result.screensAdded).toBe(1)
+    expect(result.edgesAdded).toBe(1)
+    expect(result.removedUserCopy).toBe(true)
+    expect(existsSync(userMapPath(APP, 'ios'))).toBe(false)
+
+    const promoted = await loadMap(defaultMapPath(root, 'ios'))
+    expect(promoted.screens.loans).toBeDefined()
+    expect(promoted.screens.home).toBeDefined()
+  })
+
+  it('promoteUserMap creates the repo map when missing and honors --keep', async () => {
+    await saveMap(userMapPath(APP, 'ios'), baseMap('ios'))
+    const result = await promoteUserMap(root, 'ios', APP, { keep: true })
+    expect(result.removedUserCopy).toBe(false)
+    expect(existsSync(userMapPath(APP, 'ios'))).toBe(true)
+    expect((await loadMap(defaultMapPath(root, 'ios'))).screens.home).toBeDefined()
+  })
+
+  it('promoteUserMap throws when there is no user map', async () => {
+    await expect(promoteUserMap(root, 'ios', APP)).rejects.toThrow(/nothing to promote/)
   })
 })
 

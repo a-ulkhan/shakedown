@@ -21,11 +21,20 @@ export interface PlatformProfile {
   device?: string
 }
 
+export type MapStore = 'repo' | 'user'
+
 export interface ShakedownConfig {
   ios?: PlatformProfile
   android?: PlatformProfile
   /** evidence rendering styles, keyed by name (`run render --style <name>`) */
   evidence?: { styles?: Record<string, EvidenceStyle> }
+  /**
+   * Where map WRITES go by default: "repo" (.shakedown/maps, committable) or
+   * "user" (~/.shakedown/maps/<appId>, private). Reads always merge both.
+   * Set "user" in config.local.json to keep maps private until the team
+   * adopts the tool, then `shakedown map promote` them into the repo.
+   */
+  mapStore?: MapStore
 }
 
 export function configPath(rootDir: string): string {
@@ -52,6 +61,16 @@ export async function loadConfig(rootDir: string): Promise<ShakedownConfig> {
     ...(base.evidence || local.evidence
       ? { evidence: { styles: { ...base.evidence?.styles, ...local.evidence?.styles } } }
       : {}),
+    ...(local.mapStore || base.mapStore ? { mapStore: local.mapStore ?? base.mapStore } : {}),
+  }
+}
+
+/** Like loadConfig, but returns {} when no config exists (map commands work without a profile). */
+export async function tryLoadConfig(rootDir: string): Promise<ShakedownConfig> {
+  try {
+    return await loadConfig(rootDir)
+  } catch {
+    return {}
   }
 }
 

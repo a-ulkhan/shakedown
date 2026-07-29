@@ -10,7 +10,7 @@ Re-verify the navigation map against the app as it is today.
 ## 1. Static pass (cheap, no device)
 
 ```bash
-shakedown map validate --file .shakedown/maps/<p>.map.json
+shakedown map validate --file "$(shakedown map path --platform <p>)"
 ```
 
 Fix structural errors first (dangling edges, unreachable screens) — walking a structurally broken map wastes device time.

@@ -47,7 +47,7 @@ Create `.shakedown/config.json` (committable — no machine-specific paths, no s
 }
 ```
 
-Machine-specific overrides (custom build queues, personal device choices) go in `.shakedown/config.local.json` — same shape, merged over the base, and it must be gitignored. Add `.shakedown/runs/` and `.shakedown/state/` and `.shakedown/config.local.json` to the repo's .gitignore if missing; `.shakedown/maps/` and `config.json` stay committable.
+Machine-specific overrides (custom build queues, personal device choices) go in `.shakedown/config.local.json` — same shape, merged over the base, and it must be gitignored. If the user wants to keep maps out of the repo (team hasn't adopted shakedown yet), set `"mapStore": "user"` there — map writes then go to `~/.shakedown/maps/<appId>/`, and `shakedown map promote` moves them into the repo later. Add `.shakedown/runs/` and `.shakedown/state/` and `.shakedown/config.local.json` to the repo's .gitignore if missing; `.shakedown/maps/` and `config.json` stay committable.
 
 Confirm values with the user before writing; do not guess bundle ids silently.
 

@@ -3,7 +3,8 @@ import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { Command } from 'commander'
-import { loadConfig, platformProfile } from '../config.js'
+import { loadConfig, platformProfile, tryLoadConfig } from '../config.js'
+import type { MapStore } from '../config.js'
 import { getDriver, parsePlatform } from '../drivers/index.js'
 import { findAll } from '../drivers/query.js'
 import { describeStable } from '../drivers/stable.js'
@@ -17,9 +18,12 @@ import {
   emptyMap,
   loadEffectiveMap,
   loadMap,
+  mapTierPaths,
   mergeInto,
   parseVia,
+  promoteUserMap,
   saveMap,
+  userMapPath,
   validateMap,
 } from '../map/store.js'
 import type { Edge, EdgeHealth, ScreenNode } from '../map/types.js'
@@ -55,6 +59,46 @@ function output(json: boolean | undefined, data: unknown, human?: () => void): v
 function fail(error: unknown): never {
   console.error(`error: ${error instanceof Error ? error.message : String(error)}`)
   process.exit(1)
+}
+
+// ---------------------------------------------------------------------------
+// map store resolution (repo .shakedown/maps vs user ~/.shakedown/maps/<appId>)
+
+function parseStore(value: string | undefined): MapStore | undefined {
+  if (value === undefined) return undefined
+  if (value !== 'repo' && value !== 'user') throw new Error(`invalid map store "${value}" (expected repo | user)`)
+  return value
+}
+
+/** appId for the user-level store: --app flag first, then the app profile. */
+async function resolveAppId(
+  rootDir: string,
+  platform: Platform | 'shared',
+  flagApp?: string
+): Promise<string | undefined> {
+  if (flagApp) return flagApp
+  const config = await tryLoadConfig(rootDir)
+  if (platform === 'shared') return config.ios?.appId ?? config.android?.appId
+  return config[platform]?.appId
+}
+
+/**
+ * Where map writes go: explicit --file wins; otherwise --store, falling back
+ * to config `mapStore` (default "repo"), picks the repo or user path.
+ */
+async function resolveMapWriteFile(
+  rootDir: string,
+  platform: Platform | 'shared',
+  opts: { file?: string; store?: string; app?: string }
+): Promise<string> {
+  if (opts.file) return opts.file
+  const store = parseStore(opts.store) ?? parseStore((await tryLoadConfig(rootDir)).mapStore) ?? 'repo'
+  if (store === 'repo') return defaultMapPath(rootDir, platform)
+  const appId = await resolveAppId(rootDir, platform, opts.app)
+  if (!appId) {
+    throw new Error('user-level store needs an app id — pass --app <id> or add appId to .shakedown/config.json')
+  }
+  return userMapPath(appId, platform)
 }
 
 // ---------------------------------------------------------------------------
@@ -369,7 +413,8 @@ map
   .option('--json', 'JSON output')
   .action(async (screen: string, opts: { platform: string; from?: string; root: string; json?: boolean }) => {
     try {
-      const nav = await loadEffectiveMap(opts.root, parsePlatform(opts.platform))
+      const platform = parsePlatform(opts.platform)
+      const nav = await loadEffectiveMap(opts.root, platform, await resolveAppId(opts.root, platform))
       const route = resolveRoute(nav, screen, opts.from)
       output(opts.json, route, () => {
         console.log(`route to "${screen}" from "${route.start}" (${route.steps.length} steps):`)
@@ -388,7 +433,11 @@ map
   .option('--root <dir>', 'app repo root containing .shakedown/maps', process.cwd())
   .action(async (opts: { platform: string; root: string }) => {
     try {
-      const nav = await loadEffectiveMap(opts.root, parsePlatform(opts.platform))
+      const platform = parsePlatform(opts.platform)
+      const appId = await resolveAppId(opts.root, platform)
+      const tiers = mapTierPaths(opts.root, platform, appId).filter((path) => existsSync(path))
+      const nav = await loadEffectiveMap(opts.root, platform, appId)
+      console.error(`merged from: ${tiers.join(', ')}`)
       console.log(JSON.stringify(nav, null, 2))
     } catch (error) {
       fail(error)
@@ -420,10 +469,12 @@ map
 map
   .command('upsert')
   .description('Merge a partial map (screens/edges/anchors JSON on stdin) into a map file')
-  .requiredOption('--file <path>', 'target map file (created if missing)')
+  .option('--file <path>', 'target map file (default: resolved from --store/--root/--platform)')
   .requiredOption('--app <id>', 'app id, used when creating a new map')
   .requiredOption('--platform <platform>', 'ios | android | shared')
-  .action(async (opts: { file: string; app: string; platform: string }) => {
+  .option('--store <store>', 'repo | user (default: config mapStore, else repo)')
+  .option('--root <dir>', 'app repo root containing .shakedown/maps', process.cwd())
+  .action(async (opts: { file?: string; app: string; platform: string; store?: string; root: string }) => {
     try {
       const stdin = await readStdin()
       const partial = JSON.parse(stdin) as {
@@ -432,10 +483,11 @@ map
         edges?: NavigationMapEdges
       }
       const platform = opts.platform === 'shared' ? 'shared' : parsePlatform(opts.platform)
-      const current = existsSync(opts.file) ? await loadMap(opts.file) : emptyMap(opts.app, platform)
+      const file = await resolveMapWriteFile(opts.root, platform, opts)
+      const current = existsSync(file) ? await loadMap(file) : emptyMap(opts.app, platform)
       mergeInto(current, partial)
-      await saveMap(opts.file, current)
-      console.log(`saved ${opts.file} (${Object.keys(current.screens).length} screens, ${current.edges.length} edges)`)
+      await saveMap(file, current)
+      console.log(`saved ${file} (${Object.keys(current.screens).length} screens, ${current.edges.length} edges)`)
     } catch (error) {
       fail(error)
     }
@@ -449,6 +501,7 @@ map
   .requiredOption('--name <name>', 'human-readable screen name')
   .option('--root <dir>', 'app repo root containing .shakedown/maps', process.cwd())
   .option('--file <path>', 'map file (overrides the --root/--platform default)')
+  .option('--store <store>', 'repo | user (default: config mapStore, else repo)')
   .option('--app <id>', 'app id (required only when creating a new map)')
   .option('--from <screen>', 'source screen for an edge into this screen (needs --via)')
   .option('--via <spec>', 'edge action: tap:<id> | tap:label=Foo | tap:text=Foo | swipe:down')
@@ -458,12 +511,12 @@ map
   .option('--no-wait', 'skip waiting for the screen to settle before reading')
   .option('--force', 'save even when no stable signature could be derived')
   .action(async (screenId: string, opts: PlatformDeviceOpts & {
-    name: string; root: string; file?: string; app?: string; from?: string; via?: string;
+    name: string; root: string; file?: string; store?: string; app?: string; from?: string; via?: string;
     anchor?: boolean; notes?: string; maxCues: string; wait: boolean; force?: boolean
   }) => {
     try {
       const platform = parsePlatform(opts.platform)
-      const file = opts.file ?? defaultMapPath(opts.root, platform)
+      const file = await resolveMapWriteFile(opts.root, platform, opts)
       const driver = getDriver(platform)
       const roots = opts.wait === false
         ? await driver.describeUi(opts.device)
@@ -507,12 +560,41 @@ map
 
 map
   .command('path')
-  .description('Print the default map file path for a platform')
+  .description('Print the map file path writes will target for a platform')
   .requiredOption('--platform <platform>', 'ios | android | shared')
   .option('--root <dir>', 'app repo root', process.cwd())
-  .action((opts: { platform: string; root: string }) => {
-    const platform = opts.platform === 'shared' ? 'shared' : parsePlatform(opts.platform)
-    console.log(defaultMapPath(opts.root, platform))
+  .option('--store <store>', 'repo | user (default: config mapStore, else repo)')
+  .option('--app <id>', 'app id for the user-level store (default: from app profile)')
+  .action(async (opts: { platform: string; root: string; store?: string; app?: string }) => {
+    try {
+      const platform = opts.platform === 'shared' ? 'shared' : parsePlatform(opts.platform)
+      console.log(await resolveMapWriteFile(opts.root, platform, opts))
+    } catch (error) {
+      fail(error)
+    }
+  })
+
+map
+  .command('promote')
+  .description('Merge a user-level map (~/.shakedown) into the repo map and remove the user copy')
+  .requiredOption('--platform <platform>', 'ios | android | shared')
+  .option('--root <dir>', 'app repo root containing .shakedown/maps', process.cwd())
+  .option('--app <id>', 'app id of the user-level map (default: from app profile)')
+  .option('--keep', 'keep the user-level copy after promoting')
+  .action(async (opts: { platform: string; root: string; app?: string; keep?: boolean }) => {
+    try {
+      const platform = opts.platform === 'shared' ? 'shared' : parsePlatform(opts.platform)
+      const appId = await resolveAppId(opts.root, platform, opts.app)
+      if (!appId) {
+        throw new Error('cannot determine app id — pass --app <id> or add appId to .shakedown/config.json')
+      }
+      const result = await promoteUserMap(opts.root, platform, appId, { keep: opts.keep })
+      console.log(`promoted ${result.userPath} → ${result.repoPath}`)
+      console.log(`  +${result.screensAdded} screens, +${result.edgesAdded} edges (conflicts resolved to the user version)`)
+      console.log(result.removedUserCopy ? '  user copy removed' : '  user copy kept (--keep)')
+    } catch (error) {
+      fail(error)
+    }
   })
 
 map
@@ -562,7 +644,7 @@ screen
   .action(async (opts: PlatformDeviceOpts & { root: string; top: string }) => {
     try {
       const platform = parsePlatform(opts.platform)
-      const nav = await loadEffectiveMap(opts.root, platform)
+      const nav = await loadEffectiveMap(opts.root, platform, await resolveAppId(opts.root, platform))
       const roots = await getDriver(platform).describeUi(opts.device)
       const matches = identifyScreen(nav, roots).slice(0, Number(opts.top))
       console.log(JSON.stringify(matches, null, 2))
@@ -580,7 +662,7 @@ screen
   .action(async (screenId: string, opts: PlatformDeviceOpts & { root: string }) => {
     try {
       const platform = parsePlatform(opts.platform)
-      const nav = await loadEffectiveMap(opts.root, platform)
+      const nav = await loadEffectiveMap(opts.root, platform, await resolveAppId(opts.root, platform))
       const roots = await getDriver(platform).describeUi(opts.device)
       const result = verifyScreen(nav, screenId, roots)
       console.log(JSON.stringify(result, null, 2))

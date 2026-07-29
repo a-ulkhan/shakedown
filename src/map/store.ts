@@ -1,5 +1,6 @@
-import { readFile, writeFile, mkdir } from 'node:fs/promises'
+import { readFile, writeFile, mkdir, rm } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { Platform } from '../drivers/types.js'
 import { MAP_SCHEMA_VERSION, type Edge, type EdgeAction, type NavigationMap, type ScreenNode } from './types.js'
@@ -9,9 +10,23 @@ import { MAP_SCHEMA_VERSION, type Edge, type EdgeAction, type NavigationMap, typ
  *   .shakedown/maps/<platform>.map.json   — platform-specific
  *   .shakedown/maps/shared.map.json       — cross-platform overlay (optional)
  * Platform entries win over shared entries on conflict.
+ *
+ * A second, user-level store holds private maps (e.g. while the team hasn't
+ * adopted the tool yet), keyed by the platform's appId:
+ *   ~/.shakedown/maps/<appId>/<platform>.map.json
+ * Reads always merge both stores; user entries win over repo entries.
+ * `map promote` moves a user map into the repo store.
  */
 export function defaultMapPath(rootDir: string, platform: Platform | 'shared'): string {
   return join(rootDir, '.shakedown', 'maps', `${platform}.map.json`)
+}
+
+export function shakedownHome(): string {
+  return process.env.SHAKEDOWN_HOME ?? join(homedir(), '.shakedown')
+}
+
+export function userMapPath(appId: string, platform: Platform | 'shared'): string {
+  return join(shakedownHome(), 'maps', appId, `${platform}.map.json`)
 }
 
 export function emptyMap(app: string, platform: Platform | 'shared'): NavigationMap {
@@ -100,28 +115,39 @@ export function parseVia(spec: string): EdgeAction {
 }
 
 /**
- * Load the effective map for a platform: shared overlay merged with the
- * platform map. Platform screens override shared screens with the same id;
- * platform edges override shared edges with the same (from, to, action kind).
+ * The map files that can contribute to a platform's effective map, in merge
+ * order (later wins): repo shared → repo platform → user shared → user platform.
+ * User tiers are only considered when the appId is known.
+ */
+export function mapTierPaths(
+  rootDir: string,
+  platform: Platform,
+  appId?: string
+): string[] {
+  const tiers = [defaultMapPath(rootDir, 'shared'), defaultMapPath(rootDir, platform)]
+  if (appId) tiers.push(userMapPath(appId, 'shared'), userMapPath(appId, platform))
+  return tiers
+}
+
+/**
+ * Load the effective map for a platform: repo shared → repo platform →
+ * user shared → user platform, merged in that order (later tiers win).
+ * Screens override by id; edges by (from, to, action kind).
  */
 export async function loadEffectiveMap(
   rootDir: string,
-  platform: Platform
+  platform: Platform,
+  appId?: string
 ): Promise<NavigationMap> {
-  const sharedPath = defaultMapPath(rootDir, 'shared')
-  const platformPath = defaultMapPath(rootDir, platform)
-
-  const shared = existsSync(sharedPath) ? await loadMap(sharedPath) : undefined
-  const platformMap = existsSync(platformPath) ? await loadMap(platformPath) : undefined
-  if (!shared && !platformMap) {
-    throw new Error(
-      `no map found for ${platform} under ${join(rootDir, '.shakedown', 'maps')} — run mapping first`
-    )
+  const present = mapTierPaths(rootDir, platform, appId).filter((path) => existsSync(path))
+  const maps = await Promise.all(present.map((path) => loadMap(path)))
+  if (maps.length === 0) {
+    const searched = [join(rootDir, '.shakedown', 'maps')]
+    if (appId) searched.push(join(shakedownHome(), 'maps', appId))
+    throw new Error(`no map found for ${platform} under ${searched.join(' or ')} — run mapping first`)
   }
-  if (!shared) return platformMap as NavigationMap
-  if (!platformMap) return { ...shared, platform }
-
-  return mergeMaps(shared, platformMap)
+  const merged = maps.reduce((lower, upper) => mergeMaps(lower, upper))
+  return { ...merged, platform }
 }
 
 export function mergeMaps(shared: NavigationMap, platform: NavigationMap): NavigationMap {
@@ -143,6 +169,50 @@ export function mergeMaps(shared: NavigationMap, platform: NavigationMap): Navig
     anchors: [...new Set([...shared.anchors, ...platform.anchors])],
     screens,
     edges,
+  }
+}
+
+export interface PromoteResult {
+  userPath: string
+  repoPath: string
+  screensAdded: number
+  edgesAdded: number
+  removedUserCopy: boolean
+}
+
+/**
+ * Promote a user-level map into the repo store (adoption day): merge the user
+ * map's anchors/screens/edges into the repo map file (creating it if missing)
+ * and delete the user copy unless `keep` is set.
+ */
+export async function promoteUserMap(
+  rootDir: string,
+  platform: Platform | 'shared',
+  appId: string,
+  options: { keep?: boolean } = {}
+): Promise<PromoteResult> {
+  const userPath = userMapPath(appId, platform)
+  if (!existsSync(userPath)) {
+    throw new Error(`no user-level map at ${userPath} — nothing to promote`)
+  }
+  const userMap = await loadMap(userPath)
+  const repoPath = defaultMapPath(rootDir, platform)
+  const repoMap = existsSync(repoPath) ? await loadMap(repoPath) : emptyMap(appId, platform)
+
+  const screensBefore = Object.keys(repoMap.screens).length
+  const edgesBefore = repoMap.edges.length
+  mergeInto(repoMap, { anchors: userMap.anchors, screens: userMap.screens, edges: userMap.edges })
+  await saveMap(repoPath, repoMap)
+
+  const removedUserCopy = !options.keep
+  if (removedUserCopy) await rm(userPath)
+
+  return {
+    userPath,
+    repoPath,
+    screensAdded: Object.keys(repoMap.screens).length - screensBefore,
+    edgesAdded: repoMap.edges.length - edgesBefore,
+    removedUserCopy,
   }
 }
 

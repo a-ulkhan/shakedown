@@ -5,7 +5,7 @@ description: Explore the app and record screens/transitions into the navigation 
 
 # shakedown map
 
-Build or extend the navigation map by exploring the live app. The map lives at `.shakedown/maps/<platform>.map.json`.
+Build or extend the navigation map by exploring the live app. The map lives at `.shakedown/maps/<platform>.map.json` by default, or in the user-level store (`~/.shakedown/maps/<appId>/`) when `mapStore: "user"` is set in `.shakedown/config.local.json` — always resolve the file with `shakedown map path --platform <p>` instead of hardcoding it.
 
 ## 0. Preconditions
 
@@ -32,7 +32,7 @@ Ensure at least one anchor exists: the screen the app lands on after `shakedown 
 
 ## 4. Wrap up
 
-- Validate: `shakedown map validate --file .shakedown/maps/<p>.map.json`
+- Validate: `shakedown map validate --file "$(shakedown map path --platform <p>)"`
 - Report to the user: screens/edges added, remaining frontier (what a future round would explore), any screens the explorer avoided (destructive elements) and why.
 - If the platforms share UX, note candidate screens for `shared.map.json` — but only move entries there when both platform maps agree.
 - Remind the user the map is committable: reviewing the diff of the map file is how the team audits what the explorer learned.
