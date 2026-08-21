@@ -28,15 +28,25 @@ Best match ≥ 0.6 → pass it as `--from`. No good match → relaunch the app (
 For each step of the route:
 
 1. Perform the action: `shakedown ui tap --id/--label <target>` (per the edge's action).
-2. Confirm arrival: `shakedown screen verify <step.to> --platform <p> --device <d>`
-3. On success, refresh the edge's timestamp:
-   `shakedown map set-health --file <map> --from <a> --to <b> --health ok --verified-now`
+2. Confirm arrival and repair drift in one call:
+   ```bash
+   shakedown screen reconcile <step.to> --platform <p> --device <d> --heal
+   ```
 
-## 3. On failure
+## 3. Act on the verdict
 
-If a tap target is missing or verify fails: dispatch the `shakedown-healer` agent with the failed edge, the platform/device, and the map path. The healer diagnoses (moved target / changed signature / new intermediate screen / removed feature), fixes the map, and verifies the repair. Then re-resolve the route from the current position and continue.
+`reconcile` answers *why* an arrival check failed, which decides what happens next. Never repair the map yourself based on a bare `verify` failure — the `lost` case looks identical and repairing it corrupts the map silently.
+
+- **`match`** — you are there. Refresh the edge's timestamp:
+  `shakedown map set-health --file <map> --from <a> --to <b> --health ok --verified-now`, then continue.
+- **`drift`** with `"healed": true` — the screen's signature had rotted and was re-derived and saved as provisional. Continue, and list the edit in your report.
+- **`drift`** with `"healed": false` — it refused because every candidate cue looked dynamic. Report it as a testability finding; do not hand-write a signature.
+- **`lost`** — you are on the screen named in `actual`, not where you meant to be. Nothing was written. Re-resolve from there (`shakedown map route <target> --from <actual>`) and continue.
+- **`unknown`** — the app is somewhere the map has never seen. Dispatch the `shakedown-healer` agent with the failed edge, the platform/device, and the map path. The healer diagnoses (moved target / new intermediate screen / removed feature), fixes the map, and verifies the repair.
 
 If the healer marks the edge broken and no alternative route exists, report exactly which transition died — that is a real finding about the app, not a tooling failure.
+
+Do not capture new screens from here. Adding territory to the map is the explorer's job; say what you saw and offer `/shakedown:map`.
 
 ## 4. Report
 

@@ -14,6 +14,9 @@ export interface ScreenNode {
   /** 2-4 stable cues that together identify this screen */
   signature: SignatureCue[]
   notes?: string
+  /** Written automatically (healed or auto-captured) and not yet blessed by a
+   *  human. Absent means blessed; `map promote` clears it. */
+  provisional?: boolean
 }
 
 export interface EdgeAction {
@@ -33,6 +36,8 @@ export interface Edge {
   verified_at?: string
   app_version?: string
   health: EdgeHealth
+  /** Written automatically and not yet blessed by a human. See ScreenNode. */
+  provisional?: boolean
 }
 
 export interface NavigationMap {

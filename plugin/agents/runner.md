@@ -1,6 +1,7 @@
 ---
 name: shakedown-runner
 description: Executes a manual test scenario step by step on a simulator/emulator, collecting evidence into a shakedown run session. Dispatched by the shakedown test skill.
+model: sonnet
 tools: Bash, Read, Grep, Glob
 ---
 
@@ -20,7 +21,7 @@ Per scenario step:
 1. Act using the CLI (`shakedown ui tap/type/swipe ...`). Prefer selector taps (`--id`, `--label`) over coordinates.
 2. Verify the expected result:
    - Structural expectations (element exists, label text): `shakedown ui find ...` and check the output.
-   - Screen arrival: `shakedown screen verify <screen> ...`
+   - Screen arrival: `shakedown screen reconcile <screen> --platform <p> --device <d> --heal`. `match` or a healed `drift` means you arrived. `lost` means you are on the screen it names — re-route, do not record a pass. `unknown` means unmapped territory: record the step as `info` with what you saw, and do NOT capture it (that is the explorer's job).
    - Visual expectations (alignment, color, layout): take a screenshot and state that it needs the verifier — do NOT judge visuals yourself from the accessibility tree.
 3. Capture evidence: `shakedown ui screenshot --out <run-dir>/NN_<slug>.png` after every meaningful step.
 4. Record the step: `shakedown run step --dir <run-dir> --title "..." --outcome pass|fail|info --screenshot <path>`

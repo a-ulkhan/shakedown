@@ -12,7 +12,8 @@ import type { ElementSelector, Platform, UiNode } from '../drivers/types.js'
 import { stitchFrames } from '../evidence/annotate.js'
 import { captureAnnotatedShot } from '../evidence/capture.js'
 import { resolveRoute, renderRouteReverse } from '../map/route.js'
-import { deriveSignature, flattenNodes, identifyScreen, verifyScreen } from '../map/signature.js'
+import { identifyScreen, verifyScreen } from '../map/signature.js'
+import { planCapture, planHeal, triage } from '../map/reconcile.js'
 import {
   defaultMapPath,
   emptyMap,
@@ -26,7 +27,7 @@ import {
   userMapPath,
   validateMap,
 } from '../map/store.js'
-import type { Edge, EdgeHealth, ScreenNode } from '../map/types.js'
+import type { EdgeHealth } from '../map/types.js'
 import { saveRecordingHandle, takeRecordingHandle } from '../run/recording-state.js'
 import { appendStep, finishRun, loadRun, recordMapEdit, startRun } from '../run/session.js'
 import type { RunStatus, StepOutcome } from '../run/session.js'
@@ -99,6 +100,24 @@ async function resolveMapWriteFile(
     throw new Error('user-level store needs an app id — pass --app <id> or add appId to .shakedown/config.json')
   }
   return userMapPath(appId, platform)
+}
+
+/** Merge a reconcile plan into the configured write tier and persist it. */
+async function applyMapWrite(
+  rootDir: string,
+  platform: Platform,
+  opts: { file?: string; store?: string; app?: string },
+  appId: string | undefined,
+  partial: Parameters<typeof mergeInto>[1]
+): Promise<string> {
+  const file = await resolveMapWriteFile(rootDir, platform, opts)
+  if (!existsSync(file) && !appId) {
+    throw new Error(`no map at ${file} yet — pass --app <id> to create it`)
+  }
+  const current = existsSync(file) ? await loadMap(file) : emptyMap(appId as string, platform)
+  mergeInto(current, partial)
+  await saveMap(file, current)
+  return file
 }
 
 // ---------------------------------------------------------------------------
@@ -527,30 +546,26 @@ map
       }
       const current = existsSync(file) ? await loadMap(file) : emptyMap(opts.app as string, platform)
 
-      const exclude = new Set<string>()
-      for (const [id, s] of Object.entries(current.screens)) {
-        if (id === screenId) continue
-        for (const cue of s.signature) exclude.add(`${cue.kind}:${cue.value}`)
-      }
-      const signature = deriveSignature(flattenNodes(roots), { max: Number(opts.maxCues), exclude })
-      if (signature.length === 0 && !opts.force) {
-        throw new Error('could not derive a stable signature (candidates looked dynamic); add cues manually or pass --force')
-      }
-
       if ((opts.from && !opts.via) || (!opts.from && opts.via)) {
         throw new Error('--from and --via must be given together')
       }
-      const screen: ScreenNode = { name: opts.name, signature, ...(opts.notes ? { notes: opts.notes } : {}) }
-      const edges: Edge[] = opts.from && opts.via
-        ? [{ from: opts.from, to: screenId, action: parseVia(opts.via), health: 'ok', verified_at: new Date().toISOString() }]
-        : []
-      mergeInto(current, {
-        screens: { [screenId]: screen },
-        anchors: opts.anchor ? [screenId] : [],
-        edges,
+      // Deliberate mapping, so not provisional: the human asked for this write.
+      const plan = planCapture(current, screenId, roots, {
+        name: opts.name,
+        maxCues: Number(opts.maxCues),
+        provisional: false,
+        ...(opts.force === true && { force: true }),
+        ...(opts.notes !== undefined && { notes: opts.notes }),
+        ...(opts.anchor === true && { anchor: true }),
+        ...(opts.from !== undefined && { from: opts.from }),
+        ...(opts.via !== undefined && { via: parseVia(opts.via) }),
       })
+      if (!plan.ok) {
+        throw new Error(`${plan.reason}; add cues manually or pass --force`)
+      }
+      mergeInto(current, plan.partial)
       await saveMap(file, current)
-      const cues = signature.map((c) => `${c.kind}=${c.value}`).join(', ') || '(none)'
+      const cues = plan.signature.map((c) => `${c.kind}=${c.value}`).join(', ') || '(none)'
       console.log(`captured "${screenId}" [${cues}]`)
       console.log(`saved ${file} (${Object.keys(current.screens).length} screens, ${current.edges.length} edges)`)
     } catch (error) {
@@ -667,6 +682,90 @@ screen
       const result = verifyScreen(nav, screenId, roots)
       console.log(JSON.stringify(result, null, 2))
       if (!result.ok) process.exit(1)
+    } catch (error) {
+      fail(error)
+    }
+  })
+
+screen
+  .command('reconcile <expected>')
+  .description('Diagnose a screen mismatch (match | drift | lost | unknown) and optionally repair the map')
+  .requiredOption('--platform <platform>', 'ios | android')
+  .requiredOption('--device <id>', 'device UDID/serial')
+  .option('--root <dir>', 'app repo root containing .shakedown/maps', process.cwd())
+  .option('--file <path>', 'map file to write (overrides the --root/--platform default)')
+  .option('--store <store>', 'repo | user (default: config mapStore, else repo)')
+  .option('--app <id>', 'app id (required for the user-level store)')
+  .option('--heal', 'on a drift verdict, re-derive the signature and save it')
+  .option('--capture <screenId>', 'on an unknown verdict, record the screen (needs --name)')
+  .option('--name <name>', 'human-readable name for the captured screen')
+  .option('--from <screen>', 'source screen for an edge into the captured screen (needs --via)')
+  .option('--via <spec>', 'edge action: tap:<id> | tap:label=Foo | swipe:down')
+  .option('--max-cues <n>', 'max signature cues to derive', '3')
+  .option('--no-wait', 'skip waiting for the screen to settle before reading')
+  .action(async (expected: string, opts: PlatformDeviceOpts & {
+    root: string; file?: string; store?: string; app?: string; heal?: boolean;
+    capture?: string; name?: string; from?: string; via?: string; maxCues: string; wait: boolean
+  }) => {
+    try {
+      const platform = parsePlatform(opts.platform)
+      const appId = await resolveAppId(opts.root, platform, opts.app)
+      // Triage against the effective (merged) map so recognition sees every
+      // tier; writes still go to the configured write tier below.
+      const nav = await loadEffectiveMap(opts.root, platform, appId)
+      const driver = getDriver(platform)
+      const roots = opts.wait === false
+        ? await driver.describeUi(opts.device)
+        : await describeStable(driver, opts.device)
+
+      const result = triage(nav, expected, roots)
+      let healed = false
+      let captured: string | null = null
+      let refused: string | undefined
+
+      if (result.verdict === 'drift' && opts.heal === true) {
+        const plan = planHeal(nav, expected, roots, { maxCues: Number(opts.maxCues) })
+        if (plan.ok) {
+          await applyMapWrite(opts.root, platform, opts, appId, plan.partial)
+          healed = true
+        } else {
+          refused = plan.reason
+        }
+      }
+
+      if (result.verdict === 'unknown' && opts.capture !== undefined) {
+        if (!opts.name) throw new Error('--capture needs --name')
+        if ((opts.from && !opts.via) || (!opts.from && opts.via)) {
+          throw new Error('--from and --via must be given together')
+        }
+        const plan = planCapture(nav, opts.capture, roots, {
+          name: opts.name,
+          maxCues: Number(opts.maxCues),
+          ...(opts.from !== undefined && { from: opts.from }),
+          ...(opts.via !== undefined && { via: parseVia(opts.via) }),
+        })
+        if (plan.ok) {
+          await applyMapWrite(opts.root, platform, opts, appId, plan.partial)
+          captured = opts.capture
+        } else {
+          refused = plan.reason
+        }
+      }
+
+      console.log(JSON.stringify({
+        verdict: result.verdict,
+        expected: result.expected,
+        actual: result.actual ?? null,
+        score: Number(result.score.toFixed(3)),
+        healed,
+        captured,
+        ...(refused !== undefined && { refused }),
+        ranked: result.ranked.slice(0, 3),
+      }, null, 2))
+
+      // Exit 0 only when the caller can proceed: we are where we meant to be,
+      // or the map was actually repaired.
+      if (!(result.verdict === 'match' || healed || captured !== null)) process.exit(1)
     } catch (error) {
       fail(error)
     }

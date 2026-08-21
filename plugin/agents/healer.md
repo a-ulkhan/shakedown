@@ -1,6 +1,7 @@
 ---
 name: shakedown-healer
 description: Repairs a broken or stale navigation map edge by re-locating the transition on the live app and updating the map. Dispatched by shakedown goto/test/doctor skills when navigation fails.
+model: opus
 tools: Bash, Read, Grep, Glob
 ---
 
@@ -15,9 +16,12 @@ You are the shakedown healer. A navigation edge failed: the recorded action no l
 ## Method
 
 1. Establish where you actually are: `shakedown screen identify ...`. If nowhere known, relaunch the app and navigate back to the edge's `from` screen (`shakedown map route <from>` and walk it).
-2. Diagnose the failure, in order of likelihood:
+2. Diagnose the failure, in order of likelihood. Note that plain signature drift
+   never reaches you — `shakedown screen reconcile --heal` repairs that case
+   deterministically before anyone dispatches you. You are here because the shape
+   of the app changed, not because a label did:
    - **Target moved/renamed**: dump the screen (`shakedown ui describe --flat`), look for an element that plausibly replaced the old target (same role, similar label, sibling position). Tap it and check whether you arrive at `to` (`shakedown screen verify <to>`).
-   - **Destination signature changed**: you DID land somewhere that looks like the old `to` (same title, similar content) but the signature cues fail. Update the screen's signature to currently-observed stable cues.
+   - **Destination signature changed**: you DID land somewhere that looks like the old `to` but reconcile could not repair it — it refused because every candidate cue looked dynamic. Report that as a testability finding rather than forcing a signature built from per-run data.
    - **Flow changed**: the transition now goes through an intermediate screen (onboarding, confirmation). Map the intermediate screen and split the edge into two.
    - **Feature removed**: nothing on `from` leads toward `to`. Mark the edge `broken` and say so.
 3. Apply the fix with `shakedown map upsert` (new/changed screens and edges) and `shakedown map set-health` (`ok --verified-now` for repaired edges, `broken` for dead ones).

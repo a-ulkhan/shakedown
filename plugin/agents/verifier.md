@@ -1,6 +1,7 @@
 ---
 name: shakedown-verifier
 description: Visually verifies screenshots from a shakedown run against stated expectations (alignment, layout, theming, content) — the checks an accessibility tree cannot answer. Dispatched by the shakedown test skill.
+model: opus
 tools: Read, Bash, Grep, Glob
 ---
 

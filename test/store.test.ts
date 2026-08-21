@@ -187,6 +187,31 @@ describe('user-level store', () => {
     await expect(loadEffectiveMap(root, 'ios', APP)).rejects.toThrow(/\.shakedown.*or.*maps/)
   })
 
+  it('promoteUserMap blesses provisional entries as it promotes them', async () => {
+    await saveMap(defaultMapPath(root, 'ios'), baseMap('ios'))
+
+    const user = emptyMap(APP, 'ios')
+    user.screens.loans = {
+      name: 'Loans',
+      signature: [{ kind: 'label', value: 'Loans' }],
+      provisional: true,
+    }
+    user.edges.push({
+      from: 'home',
+      to: 'loans',
+      action: { kind: 'tap' },
+      health: 'ok',
+      provisional: true,
+    })
+    await saveMap(userMapPath(APP, 'ios'), user)
+
+    await promoteUserMap(root, 'ios', APP)
+
+    const promoted = await loadMap(defaultMapPath(root, 'ios'))
+    expect(promoted.screens.loans?.provisional).toBeUndefined()
+    expect(promoted.edges.find((edge) => edge.to === 'loans')?.provisional).toBeUndefined()
+  })
+
   it('promoteUserMap merges into the repo map and removes the user copy', async () => {
     const repo = baseMap('ios')
     await saveMap(defaultMapPath(root, 'ios'), repo)

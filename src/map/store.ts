@@ -172,6 +172,17 @@ export function mergeMaps(shared: NavigationMap, platform: NavigationMap): Navig
   }
 }
 
+/**
+ * Clear the provisional flag. Promotion into the repo store IS the human
+ * blessing of entries shakedown wrote on its own.
+ */
+function bless<T extends { provisional?: boolean }>(entry: T): T {
+  if (entry.provisional === undefined) return entry
+  const blessed = { ...entry }
+  delete blessed.provisional
+  return blessed
+}
+
 export interface PromoteResult {
   userPath: string
   repoPath: string
@@ -201,7 +212,13 @@ export async function promoteUserMap(
 
   const screensBefore = Object.keys(repoMap.screens).length
   const edgesBefore = repoMap.edges.length
-  mergeInto(repoMap, { anchors: userMap.anchors, screens: userMap.screens, edges: userMap.edges })
+  mergeInto(repoMap, {
+    anchors: userMap.anchors,
+    screens: Object.fromEntries(
+      Object.entries(userMap.screens).map(([id, screen]) => [id, bless(screen)])
+    ),
+    edges: userMap.edges.map(bless),
+  })
   await saveMap(repoPath, repoMap)
 
   const removedUserCopy = !options.keep

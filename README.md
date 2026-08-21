@@ -100,6 +100,9 @@ shakedown map route loans --platform ios      # how do I get to the Loans screen
 shakedown map validate --file .shakedown/maps/ios.map.json
 shakedown map show --platform android
 shakedown map promote --platform ios          # merge your private (~/.shakedown) map into the repo
+
+# self-healing: why did the arrival check fail, and repair it if it is safe to
+shakedown screen reconcile loans --platform ios --device <UDID> --heal
 ```
 
 Every command takes `--json` (or prints JSON by default where output is data), so AI agents can consume everything.
@@ -116,6 +119,23 @@ Maps live in your app repo, committable and team-shareable:
 ```
 
 There is also a **user-level store** at `~/.shakedown/maps/<appId>/` (override the base dir with `SHAKEDOWN_HOME`) for maps you don't want to commit — e.g. while your team hasn't adopted the tool yet. Reads always merge both stores (repo shared → repo platform → user shared → user platform, later wins), so private maps layer on top of the team map. Writes go to the repo by default; opt into the user store per machine with `"mapStore": "user"` in `.shakedown/config.local.json`, or per command with `--store user`. On adoption day, `shakedown map promote --platform ios` merges your user map into the repo files and removes the private copy (`--keep` retains it).
+
+### Self-healing
+
+A failed arrival check has two causes that look identical at the call site and must be handled oppositely: either you are on the right screen and a cue changed (**drift**), or navigation went somewhere unintended (**lost**). Repairing the second case would overwrite the screen's signature with a *different* screen's cues, leaving a map that verifies green forever while routing you to the wrong place.
+
+`shakedown screen reconcile <screen> --heal` tells them apart deterministically — it ranks the live screen against every screen in the map, no model involved — and returns one of four verdicts:
+
+| Verdict | Meaning | What `--heal` does |
+|---|---|---|
+| `match` | you are where you meant to be | nothing |
+| `drift` | right screen, signature has rotted | re-derives the signature and saves it |
+| `lost` | you are on the screen named in `actual` | **nothing** — refuses to write, so you re-route |
+| `unknown` | nowhere the map has seen | nothing (add it with `map capture-current`) |
+
+Exit code is 0 for `match` and for a successful repair, 1 otherwise, so shell callers can branch without parsing the JSON.
+
+Anything shakedown writes on its own is marked `provisional` in the map file. It is usable immediately, but stays visibly distinct from entries a human recorded until `shakedown map promote` blesses it — promotion clears the flag. `shakedown doctor` reports what is still awaiting blessing.
 
 A map is a directed graph. Screens carry a **signature** (a few stable accessibility ids or labels that answer "am I on this screen?"); edges carry the action that gets you from one screen to the next, plus a health state (`ok` / `stale` / `broken`) and when it was last verified:
 
