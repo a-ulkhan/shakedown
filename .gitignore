@@ -5,3 +5,6 @@ dist/
 *.png
 !docs/**/*.png
 .DS_Store
+
+# local MCP/tooling config, not part of the project
+mobile-pixel.config.json
