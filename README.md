@@ -21,7 +21,7 @@ Functional, young. All five build phases are in:
 - [x] **P4 — exploration**: `/map` skill + explorer agent (targeted or full crawl, incremental saves)
 - [x] **P5 — plugin packaging**: Claude Code marketplace manifest, worked example map ([docs/examples/ios-settings.map.json](docs/examples/ios-settings.map.json), verified live against the iOS Settings app)
 
-Not yet battle-tested beyond the worked example. Expect edges.
+In regular use by the author since July 2026 for validating fixes on a real app, and shared with teammates. Field testing beyond that is still thin — the committed example map covers the iOS Settings app, so expect to build your own map on first run.
 
 ## How it works
 
