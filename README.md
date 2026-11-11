@@ -28,7 +28,7 @@ In regular use by the author since July 2026 for validating fixes on a real app,
 ```
 scenario ("verify the Arabic headline aligns with the logo on the Welcome screen")
   → resolve route via the navigation map (BFS to the target screen)
-  → drive the simulator/emulator (AXe on iOS, adb on Android)
+  → drive the simulator/emulator (sim-use or AXe on iOS, adb on Android)
   → verify each step:
       accessibility assertions   (element present, label text)   fast, deterministic
       visual checks              (the agent reads the screenshot) for what the AX tree can't see
@@ -40,11 +40,16 @@ No Appium, no instrumentation, no test framework in your app. First-party toolin
 
 | | iOS | Android |
 |---|---|---|
-| UI tree | [AXe](https://github.com/cameroncooke/AXe) `describe-ui` | `uiautomator dump` |
-| Input | AXe `tap` / `type` / `swipe` | `adb shell input` |
-| Screenshots | AXe `screenshot` | `adb exec-out screencap` |
-| Recording | AXe `record-video` | `adb shell screenrecord` |
+| UI tree | [sim-use](https://github.com/lycorp-jp/sim-use) `describe-ui --json` | `uiautomator dump` |
+| Input | sim-use `tap` / `type` / `swipe` | `adb shell input` |
+| Screenshots | sim-use `screenshot` | `adb exec-out screencap` |
+| Recording | sim-use `record-video` | `adb shell screenrecord` |
+| Foldables | sim-use `ios fold` (`shakedown ui fold`) | — |
 | Lifecycle | `xcrun simctl` | `adb` + `emulator` |
+
+sim-use is an AXe fork that still delivers taps on Xcode 27 Device Hub simulators, including both
+iPhone Duo displays, where AXe 1.8.0 taps are dropped. `SHAKEDOWN_IOS_ENGINE=axe` switches back to
+[AXe](https://github.com/cameroncooke/AXe) (same commands, no `fold`).
 
 Both drivers normalize to the same `UiNode` shape, so everything above the driver layer is platform-agnostic.
 
@@ -52,7 +57,8 @@ Both drivers normalize to the same `UiNode` shape, so everything above the drive
 
 - macOS with Xcode (for iOS) and/or Android SDK (for Android)
 - Node.js 20+
-- iOS: `brew install cameroncooke/axe/axe`
+- iOS: `brew tap lycorp-jp/tap && brew trust lycorp-jp/tap && brew install lycorp-jp/tap/sim-use`
+  (0.16.0 or newer; or `brew install cameroncooke/axe/axe` with `SHAKEDOWN_IOS_ENGINE=axe`)
 - Android: `adb` on PATH or a standard SDK location (`ANDROID_HOME`, `~/Library/Android/sdk`, `~/Android/Sdk`)
 - Optional (annotated evidence only): `brew install imagemagick ffmpeg` — `ui shot` highlights/captions need ImageMagick, `run export` needs ffmpeg. Without them, capture still works; annotation is skipped with a warning.
 
@@ -240,7 +246,8 @@ pluggable; GitLab (project uploads API) ships first.
 
 - [DroidBot](https://github.com/honeynet/droidbot) pioneered the UI transition graph this map format descends from.
 - [mobile-mcp](https://github.com/mobile-next/mobile-mcp) validated accessibility-first driving with screenshot fallback.
-- [AXe](https://github.com/cameroncooke/AXe) does the heavy lifting on iOS.
+- [sim-use](https://github.com/lycorp-jp/sim-use) does the heavy lifting on iOS, on top of
+  [AXe](https://github.com/cameroncooke/AXe), which it forks.
 
 ## License
 

@@ -6,6 +6,7 @@ import { Command } from 'commander'
 import { loadConfig, platformProfile, tryLoadConfig } from '../config.js'
 import type { MapStore } from '../config.js'
 import { getDriver, parsePlatform } from '../drivers/index.js'
+import { IosDriver } from '../drivers/ios.js'
 import { findAll } from '../drivers/query.js'
 import { describeStable } from '../drivers/stable.js'
 import type { ElementSelector, Platform, UiNode } from '../drivers/types.js'
@@ -343,6 +344,22 @@ ui.command('swipe')
         Number(opts.duration)
       )
       console.log('swiped')
+    } catch (error) {
+      fail(error)
+    }
+  })
+
+ui.command('fold')
+  .description('Set a foldable iOS simulator posture (iPhone Duo): closed = cover display, open/half = inner display')
+  .requiredOption('--device <id>', 'simulator UDID')
+  .argument('<posture>', 'closed | open | half')
+  .action(async (posture: string, opts: { device: string }) => {
+    try {
+      if (posture !== 'closed' && posture !== 'open' && posture !== 'half') {
+        throw new Error(`unknown posture "${posture}" — expected closed, open or half`)
+      }
+      await new IosDriver().fold(opts.device, posture)
+      console.log(`folded ${posture}`)
     } catch (error) {
       fail(error)
     }
